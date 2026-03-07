@@ -1,0 +1,111 @@
+{
+  "name": "ai-agent-orchestrator",
+  "displayName": "AI Agent Orchestrator",
+  "description": "Autonomous multi-agent orchestration with Plan-Eval-Gather-Execute-Verify loop. Features 6 specialized AI agents, self-healing, persistent memory learning, and supports design, debugging, implementation tasks.",
+  "keywords": [
+    "agents",
+    "orchestration",
+    "autonomous",
+    "self-healing",
+    "multi-agent",
+    "planning",
+    "architecture",
+    "development",
+    "qa",
+    "verification",
+    "memory",
+    "learning",
+    "pegev"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shreyanshjain7174/ai-agent-orchestrator"
+  },
+  "author": "Shreyansh Sancheti",
+  "license": "MIT",
+  "homepage": "https://github.com/shreyanshjain7174/ai-agent-orchestrator",
+  "mcp": {
+    "version": "1.6.0",
+    "transport": "stdio",
+    "command": "uv",
+    "args": [
+      "run",
+      "--prerelease=allow",
+      "--with",
+      "mcp[cli]>=1.6.0,<2.0.0",
+      "--with-requirements",
+      "requirements.txt",
+      "mcp",
+      "run",
+      "mcp_server.py"
+    ],
+    "env": {
+      "GITHUB_TOKEN": "your_github_token_here",
+      "AZURE_AI_PROJECT_ENDPOINT": "https://models.github.ai/inference/",
+      "AZURE_AI_MODEL_DEPLOYMENT_NAME": "openai/gpt-5.1"
+    }
+  },
+  "tools": [
+    {
+      "name": "autonomous_execute",
+      "description": "Execute tasks using autonomous Plan-Eval-Gather-Execute-Verify loop with self-healing. Supports modes: design, fix_bug, debug, implement, refactor.",
+      "parameters": {
+        "task": "string",
+        "mode": "design|fix_bug|debug|implement|refactor"
+      }
+    },
+    {
+      "name": "get_learnings",
+      "description": "Retrieve past learnings from agent memory system. Agents continuously learn from executions.",
+      "parameters": {
+        "task_type": "string",
+        "limit": "number"
+      }
+    },
+    {
+      "name": "show_autonomous_capabilities",
+      "description": "Display autonomous orchestrator capabilities, agents, and configuration."
+    },
+    {
+      "name": "architect_design",
+      "description": "Generate architecture and requirements for a software task.",
+      "parameters": {
+        "task": "string",
+        "constraints": "string"
+      }
+    },
+    {
+      "name": "developer_implement",
+      "description": "Generate implementation details from architecture.",
+      "parameters": {
+        "task": "string",
+        "architecture": "string",
+        "feedback": "string"
+      }
+    },
+    {
+      "name": "qa_review",
+      "description": "Review implementation quality, security, and test readiness.",
+      "parameters": {
+        "requirements": "string",
+        "implementation": "string"
+      }
+    },
+    {
+      "name": "orchestrate_task",
+      "description": "Run full architect → developer → QA feedback loop workflow.",
+      "parameters": {
+        "task": "string"
+      }
+    },
+    {
+      "name": "show_model_routing",
+      "description": "Show effective model mapping used by specialized tools."
+    }
+  ],
+  "categories": [
+    "development",
+    "productivity",
+    "automation"
+  ]
+}

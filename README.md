@@ -1,5 +1,52 @@
 # AI Agent Orchestrator
 
+[![MCP Server](https://img.shields.io/badge/MCP-Server-blue)](https://modelcontextprotocol.io)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Smithery](https://img.shields.io/badge/Smithery-MCP_Registry-green)](https://smithery.ai/server/ai-agent-orchestrator)
+
+A sophisticated multi-agent orchestration system that coordinates specialized AI agents to complete complex software development tasks through automatic feedback loops and agent-to-agent communication.
+
+**🚀 Key Features:**
+- 🤖 **6 Specialized AI Agents** - Plan, Evaluate, Research, Architect, Develop, Verify
+- 🔄 **Self-Healing PEGEV Loop** - Autonomous execution with iterative improvement
+- 🧠 **Persistent Memory** - Learns from mistakes and improves over time
+- 🛠️ **GitHub Copilot Integration** - Available as MCP server with 8 tools
+- ⚡ **Autonomous Execution** - Handles "design", "fix_bug", "debug", "implement" tasks
+- 🔌 **Highly Extensible** - Easy model swapping, custom agents, pluggable memory
+
+## Quick Start
+
+### Install via Smithery (Recommended)
+
+To install AI Agent Orchestrator for Claude Desktop automatically via [Smithery](https://smithery.ai/server/ai-agent-orchestrator):
+
+```bash
+npx -y @smithery/cli install ai-agent-orchestrator --client claude
+```
+
+### Manual Installation
+
+1. Clone and setup:
+   ```bash
+   git clone https://github.com/shreyanshjain7174/ai-agent-orchestrator.git
+   cd ai-agent-orchestrator
+   python -m venv .venv
+   source .venv/bin/activate  # or .venv\Scripts\activate on Windows
+   pip install -r requirements.txt
+   ```
+
+2. Configure `.env`:
+   ```bash
+   cp .env.example .env
+   # Edit .env with your GitHub token or Azure credentials
+   ```
+
+3. Run as MCP server:
+   ```bash
+   uv run --prerelease=allow --with "mcp[cli]>=1.6.0,<2.0.0" --with-requirements requirements.txt mcp run mcp_server.py
+   ```
+
 A sophisticated multi-agent orchestration system that coordinates specialized AI agents to complete complex software development tasks through automatic feedback loops and agent-to-agent communication.
 
 ## Overview
