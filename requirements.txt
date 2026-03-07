@@ -1,0 +1,25 @@
+# AI Agent Orchestrator - Python Dependencies
+# Pin versions to avoid breaking changes during preview
+
+# Microsoft Agent Framework (core)
+agent-framework-azure-ai==1.0.0b260107
+agent-framework-core==1.0.0b260107
+
+# HTTP Server support
+azure-ai-agentserver-core==1.0.0b10
+azure-ai-agentserver-agentframework==1.0.0b10
+
+# Azure authentication
+azure-identity>=1.25.1
+
+# Environment variables
+python-dotenv>=1.2.1
+
+# Debugging support (for VSCode Python Debugger)
+debugpy
+
+# Dev tools (for agentdev CLI)
+agent-dev-cli
+
+# MCP server runtime for Copilot tool registration
+mcp[cli]>=1.6.0,<2.0.0
