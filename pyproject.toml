@@ -1,0 +1,93 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-agent-orchestrator"
+version = "1.0.0"
+description = "Autonomous multi-agent orchestration with Plan-Eval-Gather-Execute-Verify loop, persistent memory, and self-healing capabilities"
+authors = [{name = "Shreyansh Sancheti", email = "shreyanshjain7174@github.com"}]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.10"
+keywords = [
+    "mcp",
+    "agents",
+    "orchestration",
+    "autonomous",
+    "ai",
+    "copilot",
+    "pegev",
+    "self-healing",
+    "multi-agent",
+    "architecture",
+    "development"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "agent-framework-azure-ai==1.0.0b260107",
+    "agent-framework-core==1.0.0b260107",
+    "azure-ai-agentserver-core==1.0.0b10",
+    "azure-ai-agentserver-agentframework==1.0.0b10",
+    "azure-identity>=1.25.1",
+    "python-dotenv>=1.2.1",
+    "mcp[cli]>=1.6.0,<2.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "debugpy",
+    "agent-dev-cli",
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+memory = [
+    "mem0 @ git+https://github.com/supermemory-ai/mem0.git",
+]
+all = [
+    "debugpy",
+    "agent-dev-cli",
+    "pytest>=7.0.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+    "mem0 @ git+https://github.com/supermemory-ai/mem0.git",
+]
+
+[project.urls]
+Homepage = "https://github.com/shreyanshjain7174/ai-agent-orchestrator"
+Documentation = "https://github.com/shreyanshjain7174/ai-agent-orchestrator/blob/main/README.md"
+Repository = "https://github.com/shreyanshjain7174/ai-agent-orchestrator"
+Issues = "https://github.com/shreyanshjain7174/ai-agent-orchestrator/issues"
+Changelog = "https://github.com/shreyanshjain7174/ai-agent-orchestrator/releases"
+
+[project.scripts]
+ai-agent-orchestrator = "mcp_server:main"
+ai-agent-backtest = "backtest_suite:main"
+
+[tool.setuptools]
+py-modules = ["autonomous_orchestrator", "orchestrator", "mcp_server", "backtest_suite", "examples"]
+
+[tool.black]
+line-length = 120
+target-version = ['py310', 'py311', 'py312']
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+select = ["E", "F", "I", "N", "W"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py", "backtest_suite.py"]

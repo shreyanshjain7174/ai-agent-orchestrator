@@ -1,0 +1,146 @@
+[
+  {
+    "timestamp": "2026-03-07T15:48:17.679771",
+    "task_type": "authentication",
+    "issue": "Special characters in passwords cause login failures",
+    "solution": "Use URL encoding for password fields",
+    "outcome": "success",
+    "confidence": 0.8
+  },
+  {
+    "timestamp": "2026-03-07T15:48:17.681120",
+    "task_type": "database",
+    "issue": "N+1 query problem in user service causes slow queries",
+    "solution": "Use batch loading and eager loading strategies",
+    "outcome": "success",
+    "confidence": 0.8
+  },
+  {
+    "timestamp": "2026-03-07T15:48:17.682757",
+    "task_type": "testing",
+    "issue": "Test failed: assertion error on line 42 - boundary condition not handled",
+    "solution": "Check boundary conditions in validation logic",
+    "outcome": "learned",
+    "confidence": 0.85
+  },
+  {
+    "timestamp": "2026-03-07T16:32:33.645138",
+    "task_type": "authentication",
+    "issue": "Special characters in passwords cause login failures",
+    "solution": "Use URL encoding for password fields",
+    "outcome": "success",
+    "confidence": 0.8
+  },
+  {
+    "timestamp": "2026-03-07T16:32:33.646181",
+    "task_type": "database",
+    "issue": "N+1 query problem in user service causes slow queries",
+    "solution": "Use batch loading and eager loading strategies",
+    "outcome": "success",
+    "confidence": 0.8
+  },
+  {
+    "timestamp": "2026-03-07T16:32:33.647780",
+    "task_type": "testing",
+    "issue": "Test failed: assertion error on line 42 - boundary condition not handled",
+    "solution": "Check boundary conditions in validation logic",
+    "outcome": "learned",
+    "confidence": 0.85
+  },
+  {
+    "timestamp": "2026-03-07T16:43:35.058903",
+    "task_type": "authentication",
+    "issue": "Special characters in passwords cause login failures",
+    "solution": "Use URL encoding for password fields",
+    "outcome": "success",
+    "confidence": 0.8
+  },
+  {
+    "timestamp": "2026-03-07T16:43:35.060189",
+    "task_type": "database",
+    "issue": "N+1 query problem in user service causes slow queries",
+    "solution": "Use batch loading and eager loading strategies",
+    "outcome": "success",
+    "confidence": 0.8
+  },
+  {
+    "timestamp": "2026-03-07T16:43:35.061749",
+    "task_type": "testing",
+    "issue": "Test failed: assertion error on line 42 - boundary condition not handled",
+    "solution": "Check boundary conditions in validation logic",
+    "outcome": "learned",
+    "confidence": 0.85
+  },
+  {
+    "timestamp": "2026-03-07T16:44:56.137163",
+    "task_type": "authentication",
+    "issue": "Special characters in passwords cause login failures",
+    "solution": "Use URL encoding for password fields",
+    "outcome": "success",
+    "confidence": 0.8
+  },
+  {
+    "timestamp": "2026-03-07T16:44:56.138680",
+    "task_type": "database",
+    "issue": "N+1 query problem in user service causes slow queries",
+    "solution": "Use batch loading and eager loading strategies",
+    "outcome": "success",
+    "confidence": 0.8
+  },
+  {
+    "timestamp": "2026-03-07T16:44:56.140273",
+    "task_type": "testing",
+    "issue": "Test failed: assertion error on line 42 - boundary condition not handled",
+    "solution": "Check boundary conditions in validation logic",
+    "outcome": "learned",
+    "confidence": 0.85
+  },
+  {
+    "timestamp": "2026-03-07T16:47:48.767548",
+    "task_type": "authentication",
+    "issue": "Special characters in passwords cause login failures",
+    "solution": "Use URL encoding for password fields",
+    "outcome": "success",
+    "confidence": 0.8
+  },
+  {
+    "timestamp": "2026-03-07T16:47:48.768989",
+    "task_type": "database",
+    "issue": "N+1 query problem in user service causes slow queries",
+    "solution": "Use batch loading and eager loading strategies",
+    "outcome": "success",
+    "confidence": 0.8
+  },
+  {
+    "timestamp": "2026-03-07T16:47:48.770798",
+    "task_type": "testing",
+    "issue": "Test failed: assertion error on line 42 - boundary condition not handled",
+    "solution": "Check boundary conditions in validation logic",
+    "outcome": "learned",
+    "confidence": 0.85
+  },
+  {
+    "timestamp": "2026-03-07T17:11:22.762045",
+    "task_type": "authentication",
+    "issue": "Special characters in passwords cause login failures",
+    "solution": "Use URL encoding for password fields",
+    "outcome": "success",
+    "confidence": 0.8
+  },
+  {
+    "timestamp": "2026-03-07T17:11:22.763629",
+    "task_type": "database",
+    "issue": "N+1 query problem in user service causes slow queries",
+    "solution": "Use batch loading and eager loading strategies",
+    "outcome": "success",
+    "confidence": 0.8
+  },
+  {
+    "timestamp": "2026-03-07T17:11:22.765463",
+    "task_type": "testing",
+    "issue": "Test failed: assertion error on line 42 - boundary condition not handled",
+    "solution": "Check boundary conditions in validation logic",
+    "outcome": "learned",
+    "confidence": 0.85
+  }
+]

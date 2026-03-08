@@ -12,7 +12,7 @@ import os
 from functools import lru_cache
 from typing import Any, Literal
 
-from agent_framework import AgentExecutorRequest, Message, WorkflowOutputEvent, WorkflowStatusEvent
+from agent_framework import AgentExecutorRequest, ChatMessage, WorkflowOutputEvent, WorkflowStatusEvent
 from mcp.server.fastmcp import FastMCP
 
 from orchestrator import (
@@ -40,6 +40,9 @@ from autonomous_orchestrator import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Backward-compatible alias for prior examples that used Message(role, text=...).
+Message = ChatMessage
 
 mcp = FastMCP("ai-agent-orchestrator")
 

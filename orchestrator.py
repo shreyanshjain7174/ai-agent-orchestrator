@@ -30,8 +30,8 @@ from uuid import uuid4
 from agent_framework import (
     AgentExecutorRequest,
     AgentExecutorResponse,
+    ChatMessage,
     Executor,
-    Message,
     Workflow,
     WorkflowBuilder,
     WorkflowContext,
@@ -42,6 +42,9 @@ from agent_framework import (
 from agent_framework.azure import AzureOpenAIResponsesClient
 from azure.identity import DefaultAzureCredential
 from dotenv import load_dotenv
+
+# Backward-compatible alias for prior examples that used Message(role, text=...).
+Message = ChatMessage
 
 # Load environment variables
 load_dotenv(override=True)
@@ -95,6 +98,10 @@ def get_credential_for_endpoint(project_endpoint: str) -> DefaultAzureCredential
         logger.info("Using GitHub Models endpoint")
         return None
 
+    if os.getenv("AZURE_OPENAI_API_KEY"):
+        logger.info("Using Azure OpenAI endpoint with API key authentication")
+        return None
+
     logger.info("Using Microsoft Foundry endpoint")
     return DefaultAzureCredential()
 
@@ -105,11 +112,32 @@ def create_ai_client(
     credential: DefaultAzureCredential | None,
 ) -> AzureOpenAIResponsesClient:
     """Create a model client for a specific deployment/model."""
+    api_key = os.getenv("AZURE_OPENAI_API_KEY") or None
+
+    # The SDK supports both Foundry project endpoints and direct AOAI endpoints,
+    # but different versions expect different keyword names.
     try:
+        auth_kwargs: dict[str, Any] = {"api_key": api_key} if api_key else {"credential": credential}
+
+        if "openai.azure.com" in project_endpoint.lower() or "models.github.ai" in project_endpoint.lower():
+            return AzureOpenAIResponsesClient(
+                endpoint=project_endpoint,
+                deployment_name=deployment_name,
+                **auth_kwargs,
+            )
+
         return AzureOpenAIResponsesClient(
             project_endpoint=project_endpoint,
             deployment_name=deployment_name,
-            credential=credential,
+            **auth_kwargs,
+        )
+    except TypeError:
+        # Fallback for SDK variants that only accept `endpoint`.
+        auth_kwargs = {"api_key": api_key} if api_key else {"credential": credential}
+        return AzureOpenAIResponsesClient(
+            endpoint=project_endpoint,
+            deployment_name=deployment_name,
+            **auth_kwargs,
         )
     except Exception as exc:
         logger.error("Failed to create AI client for deployment '%s': %s", deployment_name, exc)
@@ -205,7 +233,7 @@ class PrincipalArchitect(Executor):
     agent: Any
     
     def __init__(self, client: AzureOpenAIResponsesClient, id: str = "principal_architect"):
-        self.agent = client.as_agent(
+        self.agent = client.create_agent(
             name="PrincipalArchitect",
             instructions="""You are a Principal Software Architect with expertise in:
 - System design and architecture patterns (microservices, event-driven, etc.)
@@ -264,7 +292,7 @@ class DeveloperAgent(Executor):
     agent: Any
     
     def __init__(self, client: AzureOpenAIResponsesClient, id: str = "developer_agent"):
-        self.agent = client.as_agent(
+        self.agent = client.create_agent(
             name="DeveloperAgent",
             instructions="""You are an Expert Software Developer with deep expertise in:
 - Multiple programming languages (Python, Go, C#, JavaScript, etc.)
@@ -325,7 +353,7 @@ class QualityAssuranceAgent(Executor):
     agent: Any
     
     def __init__(self, client: AzureOpenAIResponsesClient, id: str = "qa_agent"):
-        self.agent = client.as_agent(
+        self.agent = client.create_agent(
             name="QualityAssuranceAgent",
             instructions="""You are a Principal QA Engineer and Security Expert with expertise in:
 - Code quality review and static analysis
@@ -629,7 +657,8 @@ def create_orchestrator_workflow() -> Workflow:
     # Manager initiates -> Coordinator routes to appropriate agents
     # Agents communicate via Coordinator which manages feedback
     workflow = (
-        WorkflowBuilder(start_executor=manager)
+        WorkflowBuilder()
+        .set_start_executor(manager)
         .add_edge(manager, coordinator)      # Manager sends task to coordinator
         .add_edge(coordinator, architect)     # Coordinator routes to architect
         .add_edge(architect, coordinator)     # Architect responds to coordinator

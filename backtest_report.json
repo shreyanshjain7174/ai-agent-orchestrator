@@ -1,0 +1,106 @@
+{
+  "timestamp": "2026-03-07T17:11:22.927460",
+  "summary": {
+    "total_tests": 8,
+    "passed": 8,
+    "failed": 0,
+    "success_rate": "100.0%",
+    "total_iterations": 13,
+    "total_time_seconds": 153.38,
+    "average_iteration_time_seconds": 11.8,
+    "memory_entries_created": 93,
+    "errors_count": 0,
+    "duration": "0:02:33.149696"
+  },
+  "tests": [
+    {
+      "name": "design_simple_api",
+      "mode": "design",
+      "success": true,
+      "iterations": 2,
+      "duration_seconds": 29.09,
+      "output_preview": "\ud83c\udfaf Task: [MODE: design]\n\nDesign a simple REST API for a todo list application with create, read, update, delete endpoints\n============================================================\n\u25b6 Phase: PLAN\nRUNT",
+      "memory_entries": 15,
+      "error": null,
+      "timestamp": "2026-03-07T17:09:18.861007"
+    },
+    {
+      "name": "fix_bug_authentication",
+      "mode": "fix_bug",
+      "success": true,
+      "iterations": 2,
+      "duration_seconds": 34.06,
+      "output_preview": "\ud83c\udfaf Task: [MODE: fix_bug]\n\nFix authentication bug where users cannot login with special characters in their passwords\n============================================================\n\u25b6 Phase: PLAN\nRUNTIME: ",
+      "memory_entries": 15,
+      "error": null,
+      "timestamp": "2026-03-07T17:09:52.919299"
+    },
+    {
+      "name": "debug_performance_issue",
+      "mode": "debug",
+      "success": true,
+      "iterations": 2,
+      "duration_seconds": 34.18,
+      "output_preview": "\ud83c\udfaf Task: [MODE: debug]\n\nDebug why database queries are running slowly in the user service - queries take 2+ seconds each\n============================================================\n\u25b6 Phase: PLAN\nRUNTI",
+      "memory_entries": 15,
+      "error": null,
+      "timestamp": "2026-03-07T17:10:27.098261"
+    },
+    {
+      "name": "implement_caching_layer",
+      "mode": "implement",
+      "success": true,
+      "iterations": 2,
+      "duration_seconds": 23.78,
+      "output_preview": "\ud83c\udfaf Task: [MODE: implement]\n\nImplement a caching layer using Redis to improve API response times - should cache user profiles\n============================================================\n\u25b6 Phase: PLAN\nR",
+      "memory_entries": 15,
+      "error": null,
+      "timestamp": "2026-03-07T17:10:50.880595"
+    },
+    {
+      "name": "refactor_legacy_code",
+      "mode": "refactor",
+      "success": true,
+      "iterations": 2,
+      "duration_seconds": 31.88,
+      "output_preview": "\ud83c\udfaf Task: [MODE: refactor]\n\nRefactor legacy authentication module to use modern async/await patterns instead of callbacks\n============================================================\n\u25b6 Phase: PLAN\nRUNTI",
+      "memory_entries": 15,
+      "error": null,
+      "timestamp": "2026-03-07T17:11:22.761346"
+    },
+    {
+      "name": "memory_persistence_and_retrieval",
+      "mode": "memory",
+      "success": true,
+      "iterations": 1,
+      "duration_seconds": 0.1,
+      "output_preview": "Retrieved 5 relevant memories",
+      "memory_entries": 17,
+      "error": null,
+      "timestamp": "2026-03-07T17:11:22.764919"
+    },
+    {
+      "name": "self_healing_error_recovery",
+      "mode": "self_healing",
+      "success": true,
+      "iterations": 1,
+      "duration_seconds": 0.1,
+      "output_preview": "Memory grew from 17 to 18",
+      "memory_entries": 1,
+      "error": null,
+      "timestamp": "2026-03-07T17:11:22.766574"
+    },
+    {
+      "name": "agent_communication_protocol",
+      "mode": "communication",
+      "success": true,
+      "iterations": 1,
+      "duration_seconds": 0.2,
+      "output_preview": "Workflow created successfully with all agents registered",
+      "memory_entries": 0,
+      "error": null,
+      "timestamp": "2026-03-07T17:11:22.920646"
+    }
+  ],
+  "errors": []
+}

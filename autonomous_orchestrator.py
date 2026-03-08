@@ -24,8 +24,8 @@ from uuid import uuid4
 from agent_framework import (
     AgentExecutorRequest,
     AgentExecutorResponse,
+    ChatMessage,
     Executor,
-    Message,
     Workflow,
     WorkflowBuilder,
     WorkflowContext,
@@ -56,6 +56,9 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+# Backward-compatible alias for prior examples that used Message(role, text=...).
+Message = ChatMessage
 
 
 # Agent model defaults
@@ -173,7 +176,7 @@ class PlannerAgent(Executor):
     agent: Any
     
     def __init__(self, client: AzureOpenAIResponsesClient, memory: MemorySystem, id: str = "planner"):
-        self.agent = client.as_agent(
+        self.agent = client.create_agent(
             name="PlannerAgent",
             instructions="""You are an Expert Planning Agent specializing in task decomposition and strategic planning.
 
@@ -209,7 +212,7 @@ Consider past learnings provided in context to avoid repeating mistakes."""
         super().__init__(id=id)
     
     @handler
-    async def handle(self, request: AgentExecutorRequest, ctx: WorkflowContext[AgentExecutorResponse]) -> None:
+    async def handle(self, request: AgentExecutorRequest, ctx: WorkflowContext[AgentExecutorRequest]) -> None:
         logger.info(f"[Planner] Creating execution plan")
         
         # Enhance prompt with relevant memories
@@ -225,7 +228,12 @@ Consider past learnings provided in context to avoid repeating mistakes."""
             request.messages[-1] = Message("user", text=enhanced_prompt)
         
         response = await self.agent.run(request.messages, should_respond=request.should_respond)
-        await ctx.send_message(AgentExecutorResponse(agent_response=response, executor_id=self.id))
+        await ctx.send_message(
+            AgentExecutorRequest(
+                messages=[Message("user", text=response.text)],
+                should_respond=True,
+            )
+        )
 
 
 class EvaluatorAgent(Executor):
@@ -234,7 +242,7 @@ class EvaluatorAgent(Executor):
     agent: Any
     
     def __init__(self, client: AzureOpenAIResponsesClient, id: str = "evaluator"):
-        self.agent = client.as_agent(
+        self.agent = client.create_agent(
             name="EvaluatorAgent",
             instructions="""You are an Expert Evaluation Agent specializing in progress assessment and decision-making.
 
@@ -262,10 +270,15 @@ If stuck in loops, escalate or suggest alternative approaches."""
         super().__init__(id=id)
     
     @handler
-    async def handle(self, request: AgentExecutorRequest, ctx: WorkflowContext[AgentExecutorResponse]) -> None:
+    async def handle(self, request: AgentExecutorRequest, ctx: WorkflowContext[AgentExecutorRequest]) -> None:
         logger.info(f"[Evaluator] Assessing progress")
         response = await self.agent.run(request.messages, should_respond=request.should_respond)
-        await ctx.send_message(AgentExecutorResponse(agent_response=response, executor_id=self.id))
+        await ctx.send_message(
+            AgentExecutorRequest(
+                messages=[Message("user", text=response.text)],
+                should_respond=True,
+            )
+        )
 
 
 class ResearcherAgent(Executor):
@@ -274,7 +287,7 @@ class ResearcherAgent(Executor):
     agent: Any
     
     def __init__(self, client: AzureOpenAIResponsesClient, id: str = "researcher"):
-        self.agent = client.as_agent(
+        self.agent = client.create_agent(
             name="ResearcherAgent",
             instructions="""You are an Expert Research Agent specializing in information gathering and analysis.
 
@@ -305,10 +318,15 @@ Be thorough but focused. Prioritize practical, actionable information."""
         super().__init__(id=id)
     
     @handler
-    async def handle(self, request: AgentExecutorRequest, ctx: WorkflowContext[AgentExecutorResponse]) -> None:
+    async def handle(self, request: AgentExecutorRequest, ctx: WorkflowContext[AgentExecutorRequest]) -> None:
         logger.info(f"[Researcher] Gathering context")
         response = await self.agent.run(request.messages, should_respond=request.should_respond)
-        await ctx.send_message(AgentExecutorResponse(agent_response=response, executor_id=self.id))
+        await ctx.send_message(
+            AgentExecutorRequest(
+                messages=[Message("user", text=response.text)],
+                should_respond=True,
+            )
+        )
 
 
 class ArchitectAgent(Executor):
@@ -317,7 +335,7 @@ class ArchitectAgent(Executor):
     agent: Any
     
     def __init__(self, client: AzureOpenAIResponsesClient, id: str = "architect"):
-        self.agent = client.as_agent(
+        self.agent = client.create_agent(
             name="ArchitectAgent",
             instructions="""You are a Principal Software Architect.
 
@@ -336,10 +354,15 @@ Provide JSON:
         super().__init__(id=id)
     
     @handler
-    async def handle(self, request: AgentExecutorRequest, ctx: WorkflowContext[AgentExecutorResponse]) -> None:
+    async def handle(self, request: AgentExecutorRequest, ctx: WorkflowContext[AgentExecutorRequest]) -> None:
         logger.info(f"[Architect] Designing solution")
         response = await self.agent.run(request.messages, should_respond=request.should_respond)
-        await ctx.send_message(AgentExecutorResponse(agent_response=response, executor_id=self.id))
+        await ctx.send_message(
+            AgentExecutorRequest(
+                messages=[Message("user", text=response.text)],
+                should_respond=True,
+            )
+        )
 
 
 class DeveloperAgent(Executor):
@@ -348,7 +371,7 @@ class DeveloperAgent(Executor):
     agent: Any
     
     def __init__(self, client: AzureOpenAIResponsesClient, id: str = "developer"):
-        self.agent = client.as_agent(
+        self.agent = client.create_agent(
             name="DeveloperAgent",
             instructions="""You are an Expert Software Developer.
 
@@ -366,10 +389,15 @@ Provide JSON:
         super().__init__(id=id)
     
     @handler
-    async def handle(self, request: AgentExecutorRequest, ctx: WorkflowContext[AgentExecutorResponse]) -> None:
+    async def handle(self, request: AgentExecutorRequest, ctx: WorkflowContext[AgentExecutorRequest]) -> None:
         logger.info(f"[Developer] Implementing solution")
         response = await self.agent.run(request.messages, should_respond=request.should_respond)
-        await ctx.send_message(AgentExecutorResponse(agent_response=response, executor_id=self.id))
+        await ctx.send_message(
+            AgentExecutorRequest(
+                messages=[Message("user", text=response.text)],
+                should_respond=True,
+            )
+        )
 
 
 class VerifierAgent(Executor):
@@ -379,7 +407,7 @@ class VerifierAgent(Executor):
     memory: MemorySystem
     
     def __init__(self, client: AzureOpenAIResponsesClient, memory: MemorySystem, id: str = "verifier"):
-        self.agent = client.as_agent(
+        self.agent = client.create_agent(
             name="VerifierAgent",
             instructions="""You are an Expert Verification and Quality Assurance Agent.
 
@@ -417,7 +445,7 @@ Be thorough but fair. Provide constructive, actionable feedback."""
         super().__init__(id=id)
     
     @handler
-    async def handle(self, request: AgentExecutorRequest, ctx: WorkflowContext[AgentExecutorResponse]) -> None:
+    async def handle(self, request: AgentExecutorRequest, ctx: WorkflowContext[AgentExecutorRequest]) -> None:
         logger.info(f"[Verifier] Validating solution")
         response = await self.agent.run(request.messages, should_respond=request.should_respond)
         
@@ -437,7 +465,12 @@ Be thorough but fair. Provide constructive, actionable feedback."""
         except Exception as e:
             logger.warning(f"Failed to extract learnings: {e}")
         
-        await ctx.send_message(AgentExecutorResponse(agent_response=response, executor_id=self.id))
+        await ctx.send_message(
+            AgentExecutorRequest(
+                messages=[Message("user", text=response.text)],
+                should_respond=True,
+            )
+        )
 
 
 class AutonomousOrchestrator(Executor):
@@ -515,8 +548,11 @@ def create_autonomous_workflow() -> Workflow:
     
     # Build autonomous workflow
     # This is a simplified flow; in production, add dynamic routing based on evaluator decisions
+    max_supersteps = int(os.getenv("MAX_AUTONOMOUS_SUPERSTEPS", "7"))
+
     workflow = (
-        WorkflowBuilder(start_executor=orchestrator)
+        WorkflowBuilder(max_iterations=max_supersteps)
+        .set_start_executor(orchestrator)
         .add_edge(orchestrator, planner)       # Start with planning
         .add_edge(planner, evaluator)          # Evaluate the plan
         .add_edge(evaluator, researcher)       # Gather context
