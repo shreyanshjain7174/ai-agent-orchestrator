@@ -25,6 +25,8 @@ To install AI Agent Orchestrator for Claude Desktop automatically via [Smithery]
 npx -y @smithery/cli install ai-agent-orchestrator --client claude
 ```
 
+> **Note:** When used via GitHub Copilot or Claude Desktop, environment variables are not required. The host application provides model access automatically.
+
 ### Manual Installation
 
 1. Clone and setup:
@@ -36,7 +38,7 @@ npx -y @smithery/cli install ai-agent-orchestrator --client claude
    pip install -r requirements.txt
    ```
 
-2. Configure `.env`:
+2. Configure `.env` (only required for standalone usage):
    ```bash
    cp .env.example .env
    # Edit .env with your GitHub token or Azure credentials
