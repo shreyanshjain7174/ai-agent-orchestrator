@@ -181,6 +181,22 @@ Task Completed (Verified & Validated)
 
 ### Configuration Options
 
+#### Dynamic Discovery Controls (optional)
+
+Use these when tuning runtime skill discovery behavior:
+
+```bash
+# Optional JSON skill inventory injected at runtime
+AI_ORCHESTRATOR_SKILLS_JSON=[{"id":"python-pro","name":"Python Pro","description":"Python coding expert","source":"env","input_schema_summary":"{task: string}","health":"healthy"}]
+
+# Discovery resilience controls
+AI_ORCHESTRATOR_DISCOVERY_RETRY_ATTEMPTS=1
+AI_ORCHESTRATOR_DISCOVERY_TTL_SECONDS=60
+```
+
+Discovery schema is normalized to: `id`, `name`, `description`, `source`, `input_schema_summary`, and `health`.
+If fresh discovery fails, the system gracefully falls back to cached inventory.
+
 #### Option 1: GitHub Models (Free Tier - Development)
 
 Get a GitHub Personal Access Token:

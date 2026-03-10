@@ -15,9 +15,10 @@ from __future__ import annotations
 import json
 import os
 import re
-from dataclasses import dataclass, field
+import time
+from dataclasses import dataclass, field, replace
 from enum import Enum
-from typing import Iterable, Protocol
+from typing import Callable, Iterable, Protocol
 
 
 class Capability(str, Enum):
@@ -44,6 +45,7 @@ class SkillMetadata:
     description: str
     source: str = "builtin"
     tags: tuple[str, ...] = ()
+    input_schema_summary: str = ""
     health: str = "unknown"
 
 
@@ -128,6 +130,7 @@ class DynamicPlanningResult:
                     "description": skill.description,
                     "source": skill.source,
                     "tags": list(skill.tags),
+                    "input_schema_summary": skill.input_schema_summary,
                     "health": skill.health,
                 }
                 for skill in self.discovered_skills
@@ -177,6 +180,89 @@ class SkillRegistry(Protocol):
 
     def discover(self) -> list[SkillMetadata]:
         """Return available skills with normalized metadata."""
+
+
+_VALID_HEALTH_VALUES = {"healthy", "degraded", "unknown", "unhealthy"}
+
+
+def normalize_skill_metadata(skill: SkillMetadata) -> SkillMetadata:
+    """Normalize discovery output into a stable, deterministic schema."""
+
+    normalized_tags = tuple(
+        tag.strip().lower()
+        for tag in skill.tags
+        if str(tag).strip()
+    )
+    normalized_health = skill.health.strip().lower() if skill.health else "unknown"
+    if normalized_health not in _VALID_HEALTH_VALUES:
+        normalized_health = "unknown"
+
+    return SkillMetadata(
+        id=skill.id.strip(),
+        name=skill.name.strip(),
+        description=skill.description.strip(),
+        source=(skill.source or "unknown").strip().lower(),
+        tags=normalized_tags,
+        input_schema_summary=skill.input_schema_summary.strip(),
+        health=normalized_health,
+    )
+
+
+@dataclass
+class DiscoveryCacheEntry:
+    """In-memory cache entry for discovered inventory snapshots."""
+
+    skills: list[SkillMetadata]
+    refreshed_at: float
+
+
+class CachedSkillRegistry:
+    """Cache wrapper with retry and stale-result fallback for discovery."""
+
+    def __init__(
+        self,
+        registry: SkillRegistry,
+        ttl_seconds: float = 60.0,
+        retry_attempts: int = 1,
+        now_fn: Callable[[], float] | None = None,
+    ):
+        self.registry = registry
+        self.ttl_seconds = max(0.0, float(ttl_seconds))
+        self.retry_attempts = max(0, int(retry_attempts))
+        self._now_fn = now_fn or time.monotonic
+        self._cache: DiscoveryCacheEntry | None = None
+
+    def discover(self) -> list[SkillMetadata]:
+        if self._cache and not self._is_stale(self._cache):
+            return list(self._cache.skills)
+
+        try:
+            refreshed = self._discover_with_retry()
+        except Exception:
+            if self._cache:
+                # Surface stale inventory but mark it degraded for callers.
+                return [replace(skill, health="degraded") for skill in self._cache.skills]
+            return []
+
+        self._cache = DiscoveryCacheEntry(skills=refreshed, refreshed_at=self._now_fn())
+        return list(refreshed)
+
+    def _discover_with_retry(self) -> list[SkillMetadata]:
+        last_exc: Exception | None = None
+        for _ in range(self.retry_attempts + 1):
+            try:
+                discovered = self.registry.discover()
+                return [normalize_skill_metadata(skill) for skill in discovered]
+            except Exception as exc:  # pragma: no cover - exercised through behavior tests
+                last_exc = exc
+                continue
+
+        if last_exc is not None:
+            raise last_exc
+        raise RuntimeError("Discovery failed with no exception details.")
+
+    def _is_stale(self, entry: DiscoveryCacheEntry) -> bool:
+        return (self._now_fn() - entry.refreshed_at) > self.ttl_seconds
 
 
 class StaticSkillRegistry:
@@ -240,14 +326,15 @@ class EnvSkillRegistry:
                 tags = ()
 
             discovered.append(
-                SkillMetadata(
+                normalize_skill_metadata(SkillMetadata(
                     id=skill_id,
                     name=name,
                     description=description,
                     source=str(item.get("source", "env")),
                     tags=tags,
+                    input_schema_summary=str(item.get("input_schema_summary", "")),
                     health=str(item.get("health", "unknown")),
-                )
+                ))
             )
         return discovered
 
@@ -255,19 +342,35 @@ class EnvSkillRegistry:
 class CompositeSkillRegistry:
     """Registry that merges multiple registries with first-wins dedupe."""
 
-    def __init__(self, registries: Iterable[SkillRegistry]):
+    def __init__(self, registries: Iterable[SkillRegistry], retry_attempts: int = 0):
         self.registries = list(registries)
+        self.retry_attempts = max(0, int(retry_attempts))
 
     def discover(self) -> list[SkillMetadata]:
         merged: list[SkillMetadata] = []
         seen: set[str] = set()
         for registry in self.registries:
-            for skill in registry.discover():
-                if skill.id in seen:
+            skills = self._discover_with_retry(registry)
+            if not skills:
+                continue
+            for skill in skills:
+                normalized = normalize_skill_metadata(skill)
+                if not normalized.id or not normalized.name or not normalized.description:
                     continue
-                seen.add(skill.id)
-                merged.append(skill)
+                if normalized.id in seen:
+                    continue
+                seen.add(normalized.id)
+                merged.append(normalized)
         return merged
+
+    def _discover_with_retry(self, registry: SkillRegistry) -> list[SkillMetadata]:
+        for attempt in range(self.retry_attempts + 1):
+            try:
+                return registry.discover()
+            except Exception:
+                if attempt >= self.retry_attempts:
+                    return []
+        return []
 
 
 def default_static_skills() -> list[SkillMetadata]:
@@ -325,13 +428,44 @@ def default_static_skills() -> list[SkillMetadata]:
     ]
 
 
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
 def build_default_registry() -> SkillRegistry:
     """Build production-safe default registry with env overrides and builtins."""
 
-    return CompositeSkillRegistry([
-        EnvSkillRegistry(),
-        StaticSkillRegistry(default_static_skills()),
-    ])
+    retry_attempts = _env_int("AI_ORCHESTRATOR_DISCOVERY_RETRY_ATTEMPTS", 1)
+    ttl_seconds = _env_float("AI_ORCHESTRATOR_DISCOVERY_TTL_SECONDS", 60.0)
+
+    composite = CompositeSkillRegistry(
+        [
+            EnvSkillRegistry(),
+            StaticSkillRegistry(default_static_skills()),
+        ],
+        retry_attempts=retry_attempts,
+    )
+    return CachedSkillRegistry(
+        composite,
+        ttl_seconds=ttl_seconds,
+        retry_attempts=retry_attempts,
+    )
 
 
 class RuleBasedSkillClassifier:

@@ -3,8 +3,10 @@
 import json
 
 from dynamic_orchestration import (
+    CachedSkillRegistry,
     Capability,
     ClassifiedSkill,
+    CompositeSkillRegistry,
     DagPlanner,
     EnvSkillRegistry,
     RuleBasedSkillClassifier,
@@ -27,6 +29,7 @@ def test_env_skill_registry_parses_valid_payload(monkeypatch):
             "description": "Expert Python implementation and testing",
             "source": "env",
             "tags": ["python", "implementation", "testing"],
+            "input_schema_summary": "{code: string, files?: string[]}",
             "health": "healthy",
         }
     ]
@@ -38,6 +41,7 @@ def test_env_skill_registry_parses_valid_payload(monkeypatch):
     assert len(discovered) == 1
     assert discovered[0].id == "python-pro"
     assert "implementation" in discovered[0].tags
+    assert discovered[0].input_schema_summary.startswith("{")
 
 
 def test_env_skill_registry_gracefully_handles_invalid_json(monkeypatch):
@@ -120,3 +124,91 @@ def test_dynamic_planning_result_is_deterministic_for_same_input():
 
     assert first == second
     assert first["resolved_mode"] in {"fix_bug", "debug", "implement", "design", "refactor"}
+
+
+def test_composite_registry_handles_partial_source_failures():
+    class TimeoutRegistry:
+        def discover(self):
+            raise TimeoutError("source timeout")
+
+    class HealthyRegistry:
+        def discover(self):
+            return [
+                SkillMetadata(
+                    id="healthy-source",
+                    name="Healthy Source",
+                    description="Reliable planning provider",
+                    source="fixture",
+                    input_schema_summary="{task: string}",
+                    health="healthy",
+                )
+            ]
+
+    registry = CompositeSkillRegistry([TimeoutRegistry(), HealthyRegistry()], retry_attempts=1)
+    discovered = registry.discover()
+
+    assert len(discovered) == 1
+    assert discovered[0].id == "healthy-source"
+    assert discovered[0].health == "healthy"
+
+
+def test_cached_registry_retries_after_timeout_before_failing():
+    class FlakyRegistry:
+        def __init__(self):
+            self.calls = 0
+
+        def discover(self):
+            self.calls += 1
+            if self.calls == 1:
+                raise TimeoutError("first call timed out")
+            return [
+                SkillMetadata(
+                    id="recovered",
+                    name="Recovered",
+                    description="Recovered after retry",
+                    health="healthy",
+                )
+            ]
+
+    flaky = FlakyRegistry()
+    cached = CachedSkillRegistry(flaky, ttl_seconds=0.0, retry_attempts=1)
+
+    discovered = cached.discover()
+
+    assert len(discovered) == 1
+    assert flaky.calls == 2
+
+
+def test_cached_registry_falls_back_to_stale_inventory_on_timeout():
+    class SequencedRegistry:
+        def __init__(self):
+            self.calls = 0
+
+        def discover(self):
+            self.calls += 1
+            if self.calls == 1:
+                return [
+                    SkillMetadata(
+                        id="cached-skill",
+                        name="Cached Skill",
+                        description="Used for stale fallback",
+                        health="healthy",
+                    )
+                ]
+            raise TimeoutError("upstream timeout")
+
+    clock = {"value": 0.0}
+
+    def _now() -> float:
+        return clock["value"]
+
+    registry = SequencedRegistry()
+    cached = CachedSkillRegistry(registry, ttl_seconds=0.0, retry_attempts=0, now_fn=_now)
+
+    fresh = cached.discover()
+    clock["value"] = 1.0
+    stale = cached.discover()
+
+    assert fresh[0].id == "cached-skill"
+    assert stale[0].id == "cached-skill"
+    assert stale[0].health == "degraded"
