@@ -198,6 +198,14 @@ AI_ORCHESTRATOR_CLASSIFIER_MIN_CONFIDENCE=0.6
 
 # Dynamic composition guardrail
 AI_ORCHESTRATOR_MAX_TEAM_SIZE=6
+
+# DAG planner controls
+# dynamic (default): role-aware adaptive dependencies
+# static: mode-template dependencies
+AI_ORCHESTRATOR_DAG_MODE=dynamic
+
+# Maximum DAG nodes (minimum enforced to 1)
+AI_ORCHESTRATOR_MAX_DAG_NODES=24
 ```
 
 Discovery schema is normalized to: `id`, `name`, `description`, `source`, `input_schema_summary`, and `health`.

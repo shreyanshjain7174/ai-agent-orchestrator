@@ -6,6 +6,8 @@ import sys
 import types
 from types import SimpleNamespace
 
+import pytest
+
 
 def _install_mcp_server_stubs() -> None:
     """Install lightweight stubs so mcp_server can be imported in CI without external SDKs."""
@@ -149,6 +151,82 @@ def test_autonomous_execute_returns_loop_history_and_no_fallback_by_default():
     assert result["loops_requested"] == 2
     assert result["loops_executed"] >= 1
     assert isinstance(result["loop_history"], list)
+    assert result["fallback"]["triggered"] is False
+
+
+def test_autonomous_execute_clamps_loop_count_to_minimum(monkeypatch):
+    mcp_server = _load_mcp_server_module()
+
+    async def _incomplete_run(_task_prompt: str, execution_order=None):
+        _ = execution_order
+        return {
+            "phases_executed": ["PLAN"],
+            "final_status": "INCOMPLETE",
+            "iteration_count": 1,
+            "outputs": ["still working"],
+            "success_indicators": {"completed": False, "verified": False},
+        }
+
+    monkeypatch.setattr(mcp_server, "_collect_autonomous_run", _incomplete_run)
+
+    result = asyncio.run(
+        mcp_server.autonomous_execute(
+            "Implement endpoint with tests",
+            mode="implement",
+            max_loops=0,
+            enable_legacy_fallback=False,
+        )
+    )
+
+    assert result["loops_requested"] == 1
+    assert result["loops_executed"] == 1
+
+
+def test_autonomous_execute_clamps_loop_count_to_maximum(monkeypatch):
+    mcp_server = _load_mcp_server_module()
+
+    async def _incomplete_run(_task_prompt: str, execution_order=None):
+        _ = execution_order
+        return {
+            "phases_executed": ["PLAN"],
+            "final_status": "INCOMPLETE",
+            "iteration_count": 1,
+            "outputs": ["still working"],
+            "success_indicators": {"completed": False, "verified": False},
+        }
+
+    monkeypatch.setattr(mcp_server, "_collect_autonomous_run", _incomplete_run)
+
+    result = asyncio.run(
+        mcp_server.autonomous_execute(
+            "Implement endpoint with tests",
+            mode="implement",
+            max_loops=999,
+            enable_legacy_fallback=False,
+        )
+    )
+
+    assert result["loops_requested"] == 5
+    assert result["loops_executed"] == 5
+
+
+@pytest.mark.parametrize("mode", ["design", "fix_bug", "debug", "implement", "refactor"])
+def test_autonomous_execute_dynamic_mode_matrix_success(mode):
+    mcp_server = _load_mcp_server_module()
+
+    result = asyncio.run(
+        mcp_server.autonomous_execute(
+            f"Run representative {mode} task",
+            mode=mode,
+            max_loops=1,
+            enable_legacy_fallback=False,
+        )
+    )
+
+    assert result["effective_mode"] == mode
+    assert result["loops_requested"] == 1
+    assert result["loops_executed"] == 1
+    assert result["success_indicators"]["completed"] is True
     assert result["fallback"]["triggered"] is False
 
 

@@ -738,7 +738,7 @@ class TeamComposer:
 class DagPlanner:
     """Converts TeamSpec into a cycle-safe DAG execution plan."""
 
-    _MODE_EDGES: dict[str, tuple[tuple[str, str], ...]] = {
+    _STATIC_MODE_EDGES: dict[str, tuple[tuple[str, str], ...]] = {
         "design": (("planner", "architect"), ("architect", "verifier")),
         "implement": (("planner", "developer"), ("developer", "verifier")),
         "fix_bug": (("evaluator", "researcher"), ("researcher", "developer"), ("developer", "verifier")),
@@ -746,8 +746,38 @@ class DagPlanner:
         "refactor": (("planner", "architect"), ("architect", "developer"), ("developer", "verifier")),
     }
 
+    _DYNAMIC_ROLE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+        "planner": (),
+        "evaluator": (),
+        "researcher": ("evaluator", "planner"),
+        "architect": ("planner", "researcher"),
+        "developer": ("planner", "architect", "researcher", "evaluator"),
+        "security-reviewer": ("architect", "developer"),
+        "test-engineer": ("developer",),
+        "verifier": ("developer", "architect", "security-reviewer", "test-engineer", "researcher"),
+    }
+
+    def __init__(self, dynamic_edges: bool | None = None, max_nodes: int | None = None):
+        dag_mode = os.getenv("AI_ORCHESTRATOR_DAG_MODE", "dynamic").strip().lower()
+        self.dynamic_edges = (
+            dag_mode != "static"
+            if dynamic_edges is None
+            else bool(dynamic_edges)
+        )
+        resolved_max_nodes = (
+            _env_int("AI_ORCHESTRATOR_MAX_DAG_NODES", 24)
+            if max_nodes is None
+            else int(max_nodes)
+        )
+        self.max_nodes = max(1, resolved_max_nodes)
+
     def plan(self, team_spec: TeamSpec) -> DagPlan:
         """Build and validate DAG plan from team assignments."""
+
+        if len(team_spec.assignments) > self.max_nodes:
+            raise ValueError(
+                f"Team assignment count {len(team_spec.assignments)} exceeds max_nodes={self.max_nodes}."
+            )
 
         node_by_role: dict[str, DagNode] = {}
         for assignment in team_spec.assignments:
@@ -758,11 +788,10 @@ class DagPlanner:
                 depends_on=(),
             )
 
-        edge_template = self._MODE_EDGES.get(team_spec.mode, self._MODE_EDGES["implement"])
-        depends_map: dict[str, set[str]] = {role: set() for role in node_by_role.keys()}
-        for source, target in edge_template:
-            if source in node_by_role and target in node_by_role:
-                depends_map[target].add(source)
+        if self.dynamic_edges:
+            depends_map = self._build_dynamic_dependency_map(node_by_role, team_spec.mode)
+        else:
+            depends_map = self._build_static_dependency_map(node_by_role, team_spec.mode)
 
         # If no edges are created (e.g., reduced team), chain deterministically.
         if all(not deps for deps in depends_map.values()) and len(node_by_role) > 1:
@@ -782,6 +811,43 @@ class DagPlanner:
 
         order = self._topological_sort(nodes)
         return DagPlan(nodes=sorted(nodes, key=lambda n: n.id), execution_order=order)
+
+    def _build_static_dependency_map(
+        self,
+        node_by_role: dict[str, DagNode],
+        mode: str,
+    ) -> dict[str, set[str]]:
+        edge_template = self._STATIC_MODE_EDGES.get(mode, self._STATIC_MODE_EDGES["implement"])
+        depends_map: dict[str, set[str]] = {role: set() for role in node_by_role.keys()}
+        for source, target in edge_template:
+            if source in node_by_role and target in node_by_role:
+                depends_map[target].add(source)
+        return depends_map
+
+    def _build_dynamic_dependency_map(
+        self,
+        node_by_role: dict[str, DagNode],
+        mode: str,
+    ) -> dict[str, set[str]]:
+        depends_map: dict[str, set[str]] = {role: set() for role in node_by_role.keys()}
+
+        for role, dependencies in self._DYNAMIC_ROLE_DEPENDENCIES.items():
+            if role not in node_by_role:
+                continue
+            for dependency in dependencies:
+                if dependency in node_by_role and dependency != role:
+                    depends_map[role].add(dependency)
+
+        # Mode-aware guardrails to keep legacy execution intent preserved.
+        if mode in {"implement", "design", "refactor"}:
+            if "planner" in node_by_role and "developer" in node_by_role:
+                depends_map["developer"].add("planner")
+
+        if mode in {"fix_bug", "debug"}:
+            if "evaluator" in node_by_role and "researcher" in node_by_role:
+                depends_map["researcher"].add("evaluator")
+
+        return depends_map
 
     @staticmethod
     def _topological_sort(nodes: list[DagNode]) -> list[str]:

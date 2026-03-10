@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from dynamic_orchestration import (
     CachedSkillRegistry,
     Capability,
@@ -106,6 +108,65 @@ def test_dag_planner_builds_acyclic_execution_order():
 
     assert dag.execution_order.index("planner") < dag.execution_order.index("developer")
     assert dag.execution_order.index("developer") < dag.execution_order.index("verifier")
+
+
+def test_dag_planner_cycle_validation_failure_path():
+    class _CyclicDagPlanner(DagPlanner):
+        def _build_dynamic_dependency_map(self, node_by_role, mode):
+            _ = mode
+            return {
+                "planner": {"developer"},
+                "developer": {"planner"},
+            }
+
+    spec = TeamSpec(
+        mode="implement",
+        assignments=[
+            TeamAssignment("planner", Capability.PLANNING, "planner-agent", 0.9),
+            TeamAssignment("developer", Capability.IMPLEMENTATION, "developer-agent", 0.9),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="Cycle detected while building DAG plan"):
+        _CyclicDagPlanner(dynamic_edges=True).plan(spec)
+
+
+def test_dag_planner_max_nodes_guard_raises():
+    spec = TeamSpec(
+        mode="implement",
+        assignments=[
+            TeamAssignment("planner", Capability.PLANNING, "planner-agent", 0.9),
+            TeamAssignment("developer", Capability.IMPLEMENTATION, "developer-agent", 0.9),
+        ],
+    )
+
+    with pytest.raises(ValueError, match="max_nodes=1"):
+        DagPlanner(max_nodes=1).plan(spec)
+
+
+def test_dag_planner_static_vs_dynamic_edges_via_explicit_flag(monkeypatch):
+    monkeypatch.setenv("AI_ORCHESTRATOR_DAG_MODE", "static")
+
+    spec = TeamSpec(
+        mode="implement",
+        assignments=[
+            TeamAssignment("planner", Capability.PLANNING, "planner-agent", 0.95),
+            TeamAssignment("architect", Capability.ARCHITECTURE, "architect-agent", 0.95),
+            TeamAssignment("developer", Capability.IMPLEMENTATION, "developer-agent", 0.95),
+            TeamAssignment("verifier", Capability.VERIFICATION, "verifier-agent", 0.95),
+        ],
+    )
+
+    static_plan = DagPlanner(dynamic_edges=False).plan(spec)
+    dynamic_plan = DagPlanner(dynamic_edges=True).plan(spec)
+
+    static_by_id = {node.id: set(node.depends_on) for node in static_plan.nodes}
+    dynamic_by_id = {node.id: set(node.depends_on) for node in dynamic_plan.nodes}
+
+    assert static_by_id["verifier"] == {"developer"}
+    assert "architect" in dynamic_by_id["verifier"]
+    assert static_by_id["developer"] == {"planner"}
+    assert "architect" in dynamic_by_id["developer"]
 
 
 def test_dynamic_planning_result_is_deterministic_for_same_input():
