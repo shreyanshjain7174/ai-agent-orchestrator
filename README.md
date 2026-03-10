@@ -10,6 +10,7 @@ A sophisticated multi-agent orchestration system that coordinates specialized AI
 **🚀 Key Features:**
 - 🤖 **6 Specialized AI Agents** - Plan, Evaluate, Research, Architect, Develop, Verify
 - 🔄 **Self-Healing PEGEV Loop** - Autonomous execution with iterative improvement
+- 🧭 **Dynamic Team Planning** - Skill discovery, classification, and adaptive DAG previews
 - 🧠 **Persistent Memory** - Learns from mistakes and improves over time
 - 🛠️ **GitHub Copilot Integration** - Available as MCP server with 8 tools
 - ⚡ **Autonomous Execution** - Handles "design", "fix_bug", "debug", "implement" tasks
@@ -258,9 +259,11 @@ uv run --prerelease=allow --with "mcp[cli]>=1.6.0,<2.0.0" --with-requirements re
 
 **Autonomous Mode (Recommended for complex tasks):**
 - `autonomous_execute` ⚡ - Run self-healing PEGEV loop
-  - Modes: `design`, `fix_bug`, `debug`, `implement`, `refactor`
+    - Modes: `auto`, `design`, `fix_bug`, `debug`, `implement`, `refactor`
+    - Supports bounded loop retries with `max_loops` (1-5)
   - Auto-iterates until verified success
   - Learns from mistakes and self-corrects
+- `dynamic_plan_preview` - Preview dynamic skill classification, team composition, and DAG order before execution
 - `get_learnings` - View past learnings from memory
 - `show_autonomous_capabilities` - Display system info
 
@@ -268,6 +271,7 @@ uv run --prerelease=allow --with "mcp[cli]>=1.6.0,<2.0.0" --with-requirements re
 ```
 User: "Use autonomous_execute to design a secure user authentication API"
 User: "Fix this bug using autonomous_execute mode=fix_bug"
+User: "Preview the dynamic team with dynamic_plan_preview mode=auto"
 User: "Show me what the agents have learned with get_learnings"
 ```
 
@@ -428,7 +432,13 @@ az login
 ```
 ai-agent-orchestrator/
 ├── orchestrator.py          # Main orchestrator implementation
+├── autonomous_orchestrator.py  # Autonomous PEGEV workflow
+├── dynamic_orchestration.py # Dynamic skill discovery/classification/composition/DAG core
+├── mcp_server.py            # MCP tools and loop execution API
 ├── requirements.txt         # Python dependencies
+├── pyproject.toml           # Packaging, scripts, test extras
+├── tests/                   # Deterministic unit/integration/failure tests
+├── .github/workflows/       # CI validation
 ├── .env.example            # Environment configuration template
 ├── .env                    # Your environment configuration (git-ignored)
 ├── README.md               # This file

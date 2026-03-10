@@ -38,6 +38,7 @@ from autonomous_orchestrator import (
     DEFAULT_RESEARCHER_MODEL,
     DEFAULT_VERIFIER_MODEL,
 )
+from dynamic_orchestration import build_default_registry, build_dynamic_planning_result
 
 logger = logging.getLogger(__name__)
 
@@ -184,10 +185,59 @@ def show_model_routing() -> dict[str, str]:
 # ==================== AUTONOMOUS ORCHESTRATOR TOOLS ====================
 
 
+async def _collect_autonomous_run(task_prompt: str) -> dict[str, Any]:
+    """Execute one autonomous workflow run and collect structured telemetry."""
+    workflow = create_autonomous_workflow()
+    outputs: list[str] = []
+    statuses: list[str] = []
+    phases: list[str] = []
+
+    async for event in workflow.run_stream([Message("user", text=task_prompt)]):
+        if isinstance(event, WorkflowOutputEvent):
+            output = str(event.data)
+            outputs.append(output)
+            if "Phase:" in output:
+                phase = output.split("Phase:")[1].split("\n")[0].strip()
+                if phase not in phases:
+                    phases.append(phase)
+        elif isinstance(event, WorkflowStatusEvent):
+            statuses.append(str(event.state))
+
+    final_status = statuses[-1] if statuses else "unknown"
+    completed = "COMPLETE" in final_status.upper()
+
+    return {
+        "phases_executed": phases,
+        "final_status": final_status,
+        "iteration_count": len([item for item in outputs if "iteration" in item.lower()]),
+        "outputs": outputs,
+        "success_indicators": {
+            "completed": completed,
+            "verified": any("verified" in item.lower() for item in outputs),
+        },
+    }
+
+
+@mcp.tool()
+def dynamic_plan_preview(
+    task: str,
+    mode: Literal["auto", "design", "fix_bug", "debug", "implement", "refactor"] = "auto",
+) -> dict[str, Any]:
+    """Preview dynamic team composition and DAG plan before execution.
+
+    This tool is deterministic and safe to run repeatedly. It allows callers to
+    inspect skill discovery, classification, role assignments, and execution DAG
+    prior to actually running the autonomous loop.
+    """
+    planning = build_dynamic_planning_result(task=task, mode=mode, registry=build_default_registry())
+    return planning.to_dict()
+
+
 @mcp.tool()
 async def autonomous_execute(
     task: str,
-    mode: Literal["design", "fix_bug", "debug", "implement", "refactor"] = "implement"
+    mode: Literal["auto", "design", "fix_bug", "debug", "implement", "refactor"] = "implement",
+    max_loops: int = 1,
 ) -> dict[str, Any]:
     """Execute task using autonomous Plan-Eval-Gather-Execute-Verify loop with self-healing.
     
@@ -207,51 +257,73 @@ async def autonomous_execute(
     
     Args:
         task: The user's request or problem to solve
-        mode: Hint for the type of work (design/fix_bug/debug/implement/refactor)
+        mode: Hint for the type of work (auto/design/fix_bug/debug/implement/refactor)
+        max_loops: Maximum recovery loops before returning latest result (1-5)
     
     Returns:
         Dict with execution history, final output, learnings, and success status
     """
-    logger.info(f"[Autonomous] Starting for mode={mode}")
-    
-    # Enhance task description based on mode
-    task_prompt = f"[MODE: {mode}]\n\n{task}"
-    
-    workflow = create_autonomous_workflow()
-    outputs: list[str] = []
-    statuses: list[str] = []
-    phases: list[str] = []
+    logger.info("[Autonomous] Starting execution | mode=%s loops=%s", mode, max_loops)
 
-    async for event in workflow.run_stream([Message("user", text=task_prompt)]):
-        if isinstance(event, WorkflowOutputEvent):
-            output = str(event.data)
-            outputs.append(output)
-            # Extract phase markers
-            if "Phase:" in output:
-                phase = output.split("Phase:")[1].split("\n")[0].strip()
-                if phase not in phases:
-                    phases.append(phase)
-        elif isinstance(event, WorkflowStatusEvent):
-            statuses.append(str(event.state))
+    loop_count = max(1, min(max_loops, 5))
+    planning_registry = build_default_registry()
+
+    loop_history: list[dict[str, Any]] = []
+    last_run: dict[str, Any] = {
+        "phases_executed": [],
+        "final_status": "unknown",
+        "iteration_count": 0,
+        "outputs": [],
+        "success_indicators": {"completed": False, "verified": False},
+    }
+    last_mode = mode
+
+    for loop_index in range(loop_count):
+        planning = build_dynamic_planning_result(task=task, mode=mode, registry=planning_registry)
+        effective_mode = planning.team_spec.mode if mode == "auto" else mode
+        last_mode = effective_mode
+
+        # Embed planning context in the prompt so each loop can self-correct.
+        task_prompt = (
+            f"[MODE: {effective_mode}]\n"
+            f"[LOOP: {loop_index + 1}/{loop_count}]\n"
+            f"[DAG_ORDER: {', '.join(planning.dag_plan.execution_order)}]\n\n"
+            f"{task}"
+        )
+        run_result = await _collect_autonomous_run(task_prompt)
+        last_run = run_result
+
+        loop_history.append(
+            {
+                "loop": loop_index + 1,
+                "resolved_mode": effective_mode,
+                "planning": planning.to_dict(),
+                "run": run_result,
+            }
+        )
+
+        if run_result["success_indicators"]["completed"]:
+            break
 
     # Load memory to show learnings
     memory = MemorySystem()
     recent_learnings = memory.memories[-5:] if memory.memories else []
-    
+
     return {
         "mode": mode,
-        "phases_executed": phases,
-        "final_status": statuses[-1] if statuses else "unknown",
-        "iteration_count": len([o for o in outputs if "iteration" in o.lower()]),
-        "outputs": outputs,
+        "effective_mode": last_mode,
+        "loops_requested": loop_count,
+        "loops_executed": len(loop_history),
+        "loop_history": loop_history,
+        "phases_executed": last_run["phases_executed"],
+        "final_status": last_run["final_status"],
+        "iteration_count": last_run["iteration_count"],
+        "outputs": last_run["outputs"],
         "recent_learnings": [
             {"issue": m.issue, "solution": m.solution, "outcome": m.outcome}
             for m in recent_learnings
         ],
-        "success_indicators": {
-            "completed": "COMPLETE" in statuses[-1] if statuses else False,
-            "verified": any("verified" in o.lower() for o in outputs),
-        }
+        "success_indicators": last_run["success_indicators"],
     }
 
 
@@ -293,6 +365,12 @@ def get_learnings(task_type: str = "all", limit: int = 10) -> list[dict[str, Any
 @mcp.tool()
 def show_autonomous_capabilities() -> dict[str, Any]:
     """Show what the autonomous orchestrator can do and its agent lineup."""
+    dynamic_demo = build_dynamic_planning_result(
+        task="Implement secure API endpoint with tests",
+        mode="auto",
+        registry=build_default_registry(),
+    )
+
     return {
         "description": "Autonomous multi-agent system with self-healing capabilities",
         "execution_loop": [
@@ -323,6 +401,14 @@ def show_autonomous_capabilities() -> dict[str, Any]:
             "Implement features end-to-end",
             "Refactor code with validation"
         ],
+        "dynamic_layer": {
+            "enabled": True,
+            "description": "Builds skill-aware team composition and adaptive DAG per request.",
+            "resolved_mode_example": dynamic_demo.team_spec.mode,
+            "dag_order_example": dynamic_demo.dag_plan.execution_order,
+            "discovered_skill_count": len(dynamic_demo.discovered_skills),
+            "preview_tool": "dynamic_plan_preview",
+        },
         "model_routing": {
             "planner": os.getenv("PLANNER_MODEL", DEFAULT_PLANNER_MODEL),
             "evaluator": os.getenv("EVALUATOR_MODEL", DEFAULT_EVALUATOR_MODEL),
@@ -334,5 +420,10 @@ def show_autonomous_capabilities() -> dict[str, Any]:
     }
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Script entrypoint for `ai-agent-orchestrator` console command."""
     mcp.run(transport="stdio")
+
+
+if __name__ == "__main__":
+    main()

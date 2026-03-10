@@ -49,8 +49,19 @@ dev = [
     "debugpy",
     "agent-dev-cli",
     "pytest>=7.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "pytest-timeout>=2.2.0",
+    "pytest-mock>=3.12.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
+]
+test = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "pytest-timeout>=2.2.0",
+    "pytest-mock>=3.12.0",
 ]
 memory = [
     "mem0 @ git+https://github.com/supermemory-ai/mem0.git",
@@ -59,6 +70,10 @@ all = [
     "debugpy",
     "agent-dev-cli",
     "pytest>=7.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "pytest-timeout>=2.2.0",
+    "pytest-mock>=3.12.0",
     "black>=23.0.0",
     "ruff>=0.1.0",
     "mem0 @ git+https://github.com/supermemory-ai/mem0.git",
@@ -76,7 +91,7 @@ ai-agent-orchestrator = "mcp_server:main"
 ai-agent-backtest = "backtest_suite:main"
 
 [tool.setuptools]
-py-modules = ["autonomous_orchestrator", "orchestrator", "mcp_server", "backtest_suite", "examples"]
+py-modules = ["autonomous_orchestrator", "orchestrator", "dynamic_orchestration", "mcp_server", "backtest_suite", "examples"]
 
 [tool.black]
 line-length = 120

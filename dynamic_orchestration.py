@@ -1,0 +1,594 @@
+"""Dynamic orchestration foundation for reusable multi-project execution.
+
+This module provides the Phase 1-4 core abstractions:
+- Skill discovery via pluggable registries
+- Capability classification with deterministic rules
+- Dynamic team composition by task/mode
+- Adaptive DAG planning with cycle-safe execution order
+
+It is intentionally pure-Python and side-effect light so it can be reused in
+other projects and tested without LLM or MCP network calls.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import Iterable, Protocol
+
+
+class Capability(str, Enum):
+    """Capability taxonomy used by dynamic orchestration policies."""
+
+    PLANNING = "planning"
+    EVALUATION = "evaluation"
+    RESEARCH = "research"
+    ARCHITECTURE = "architecture"
+    IMPLEMENTATION = "implementation"
+    VERIFICATION = "verification"
+    ORCHESTRATION = "orchestration"
+    SECURITY = "security"
+    TESTING = "testing"
+    UNKNOWN = "unknown"
+
+
+@dataclass(frozen=True)
+class SkillMetadata:
+    """Normalized skill metadata produced by registries."""
+
+    id: str
+    name: str
+    description: str
+    source: str = "builtin"
+    tags: tuple[str, ...] = ()
+    health: str = "unknown"
+
+
+@dataclass(frozen=True)
+class ClassifiedSkill:
+    """Skill with one or more mapped capabilities and confidence scores."""
+
+    skill: SkillMetadata
+    capabilities: tuple[Capability, ...]
+    confidence_by_capability: dict[Capability, float]
+
+
+@dataclass(frozen=True)
+class TaskProfile:
+    """Task inputs used for dynamic team composition."""
+
+    task: str
+    mode: str = "auto"
+    constraints: str = ""
+
+
+@dataclass(frozen=True)
+class TeamAssignment:
+    """Selected skill assignment for a specific role/capability."""
+
+    role: str
+    capability: Capability
+    skill_id: str
+    confidence: float
+
+
+@dataclass
+class TeamSpec:
+    """Team composition result for a task profile."""
+
+    mode: str
+    assignments: list[TeamAssignment] = field(default_factory=list)
+    fallback_required: bool = False
+    fallback_reasons: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DagNode:
+    """Single execution node in an adaptive DAG."""
+
+    id: str
+    role: str
+    skill_id: str
+    depends_on: tuple[str, ...] = ()
+
+
+@dataclass
+class DagPlan:
+    """Validated DAG plus computed topological execution order."""
+
+    nodes: list[DagNode]
+    execution_order: list[str]
+
+
+@dataclass
+class DynamicPlanningResult:
+    """Full dynamic planning result that can be emitted by APIs/tools."""
+
+    task: str
+    requested_mode: str
+    discovered_skills: list[SkillMetadata]
+    classified_skills: list[ClassifiedSkill]
+    team_spec: TeamSpec
+    dag_plan: DagPlan
+
+    def to_dict(self) -> dict:
+        """Serialize to plain dict for JSON-safe API responses."""
+
+        return {
+            "task": self.task,
+            "requested_mode": self.requested_mode,
+            "resolved_mode": self.team_spec.mode,
+            "discovered_skills": [
+                {
+                    "id": skill.id,
+                    "name": skill.name,
+                    "description": skill.description,
+                    "source": skill.source,
+                    "tags": list(skill.tags),
+                    "health": skill.health,
+                }
+                for skill in self.discovered_skills
+            ],
+            "classified_skills": [
+                {
+                    "id": item.skill.id,
+                    "name": item.skill.name,
+                    "capabilities": [cap.value for cap in item.capabilities],
+                    "confidence": {
+                        cap.value: score for cap, score in item.confidence_by_capability.items()
+                    },
+                }
+                for item in self.classified_skills
+            ],
+            "team_spec": {
+                "mode": self.team_spec.mode,
+                "fallback_required": self.team_spec.fallback_required,
+                "fallback_reasons": self.team_spec.fallback_reasons,
+                "assignments": [
+                    {
+                        "role": assignment.role,
+                        "capability": assignment.capability.value,
+                        "skill_id": assignment.skill_id,
+                        "confidence": assignment.confidence,
+                    }
+                    for assignment in self.team_spec.assignments
+                ],
+            },
+            "dag_plan": {
+                "nodes": [
+                    {
+                        "id": node.id,
+                        "role": node.role,
+                        "skill_id": node.skill_id,
+                        "depends_on": list(node.depends_on),
+                    }
+                    for node in self.dag_plan.nodes
+                ],
+                "execution_order": self.dag_plan.execution_order,
+            },
+        }
+
+
+class SkillRegistry(Protocol):
+    """Protocol for skill inventory providers."""
+
+    def discover(self) -> list[SkillMetadata]:
+        """Return available skills with normalized metadata."""
+
+
+class StaticSkillRegistry:
+    """Registry backed by a static in-memory list."""
+
+    def __init__(self, skills: Iterable[SkillMetadata]):
+        self._skills = list(skills)
+
+    def discover(self) -> list[SkillMetadata]:
+        return list(self._skills)
+
+
+class EnvSkillRegistry:
+    """Registry backed by JSON in an environment variable.
+
+    Expected format for AI_ORCHESTRATOR_SKILLS_JSON:
+    [
+      {
+        "id": "python-pro",
+        "name": "Python Pro",
+        "description": "Expert Python implementation",
+        "source": "env",
+        "tags": ["python", "implementation"],
+        "health": "healthy"
+      }
+    ]
+    """
+
+    def __init__(self, env_var: str = "AI_ORCHESTRATOR_SKILLS_JSON"):
+        self.env_var = env_var
+
+    def discover(self) -> list[SkillMetadata]:
+        raw = os.getenv(self.env_var, "").strip()
+        if not raw:
+            return []
+
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+
+        if not isinstance(data, list):
+            return []
+
+        discovered: list[SkillMetadata] = []
+        for item in data:
+            if not isinstance(item, dict):
+                continue
+
+            skill_id = str(item.get("id", "")).strip()
+            name = str(item.get("name", "")).strip()
+            description = str(item.get("description", "")).strip()
+            if not skill_id or not name or not description:
+                continue
+
+            tags_raw = item.get("tags", [])
+            tags: tuple[str, ...]
+            if isinstance(tags_raw, list):
+                tags = tuple(str(t).strip().lower() for t in tags_raw if str(t).strip())
+            else:
+                tags = ()
+
+            discovered.append(
+                SkillMetadata(
+                    id=skill_id,
+                    name=name,
+                    description=description,
+                    source=str(item.get("source", "env")),
+                    tags=tags,
+                    health=str(item.get("health", "unknown")),
+                )
+            )
+        return discovered
+
+
+class CompositeSkillRegistry:
+    """Registry that merges multiple registries with first-wins dedupe."""
+
+    def __init__(self, registries: Iterable[SkillRegistry]):
+        self.registries = list(registries)
+
+    def discover(self) -> list[SkillMetadata]:
+        merged: list[SkillMetadata] = []
+        seen: set[str] = set()
+        for registry in self.registries:
+            for skill in registry.discover():
+                if skill.id in seen:
+                    continue
+                seen.add(skill.id)
+                merged.append(skill)
+        return merged
+
+
+def default_static_skills() -> list[SkillMetadata]:
+    """Built-in baseline skills so orchestration remains functional by default."""
+
+    return [
+        SkillMetadata(
+            id="planner-agent",
+            name="Planner Agent",
+            description="Breaks tasks into executable plans and defines success criteria.",
+            source="builtin",
+            tags=("planning", "task-decomposition"),
+            health="healthy",
+        ),
+        SkillMetadata(
+            id="evaluator-agent",
+            name="Evaluator Agent",
+            description="Evaluates output quality, risks, and loop continuation decisions.",
+            source="builtin",
+            tags=("evaluation", "quality", "orchestration"),
+            health="healthy",
+        ),
+        SkillMetadata(
+            id="researcher-agent",
+            name="Researcher Agent",
+            description="Gathers context and best-practice references before implementation.",
+            source="builtin",
+            tags=("research", "context"),
+            health="healthy",
+        ),
+        SkillMetadata(
+            id="architect-agent",
+            name="Architect Agent",
+            description="Designs scalable architecture, interfaces, and implementation guidance.",
+            source="builtin",
+            tags=("architecture", "design"),
+            health="healthy",
+        ),
+        SkillMetadata(
+            id="developer-agent",
+            name="Developer Agent",
+            description="Implements features, code changes, and deterministic tests.",
+            source="builtin",
+            tags=("implementation", "coding"),
+            health="healthy",
+        ),
+        SkillMetadata(
+            id="verifier-agent",
+            name="Verifier Agent",
+            description="Verifies quality, testing, and security readiness before completion.",
+            source="builtin",
+            tags=("verification", "testing", "security"),
+            health="healthy",
+        ),
+    ]
+
+
+def build_default_registry() -> SkillRegistry:
+    """Build production-safe default registry with env overrides and builtins."""
+
+    return CompositeSkillRegistry([
+        EnvSkillRegistry(),
+        StaticSkillRegistry(default_static_skills()),
+    ])
+
+
+class RuleBasedSkillClassifier:
+    """Deterministic classifier from skill text to capability tags."""
+
+    _CAPABILITY_KEYWORDS: dict[Capability, tuple[str, ...]] = {
+        Capability.PLANNING: ("plan", "planning", "decompose", "roadmap", "spec"),
+        Capability.EVALUATION: ("evaluate", "assessment", "review", "score", "audit"),
+        Capability.RESEARCH: ("research", "discover", "analyze", "gather", "context"),
+        Capability.ARCHITECTURE: ("architecture", "design", "system", "interface", "scalable"),
+        Capability.IMPLEMENTATION: ("implement", "code", "build", "develop", "refactor"),
+        Capability.VERIFICATION: ("verify", "validation", "qa", "quality", "test"),
+        Capability.ORCHESTRATION: ("orchestrate", "workflow", "loop", "coordination"),
+        Capability.SECURITY: ("security", "owasp", "vulnerability", "threat", "auth"),
+        Capability.TESTING: ("testing", "pytest", "mock", "fixture", "coverage"),
+    }
+
+    def classify(self, skills: Iterable[SkillMetadata]) -> list[ClassifiedSkill]:
+        """Classify skills with deterministic confidence values."""
+
+        results: list[ClassifiedSkill] = []
+        for skill in skills:
+            normalized = self._normalize_text(skill)
+            confidence: dict[Capability, float] = {}
+
+            for capability, keywords in self._CAPABILITY_KEYWORDS.items():
+                score = self._keyword_score(normalized, keywords)
+                if score <= 0:
+                    continue
+                confidence[capability] = min(0.99, 0.5 + (0.1 * score))
+
+            if not confidence:
+                confidence = {Capability.UNKNOWN: 0.6}
+
+            ordered_caps = tuple(
+                sorted(confidence.keys(), key=lambda c: confidence[c], reverse=True)
+            )
+            results.append(
+                ClassifiedSkill(
+                    skill=skill,
+                    capabilities=ordered_caps,
+                    confidence_by_capability=confidence,
+                )
+            )
+
+        return results
+
+    @staticmethod
+    def _normalize_text(skill: SkillMetadata) -> str:
+        parts = [skill.name, skill.description, " ".join(skill.tags)]
+        return " ".join(parts).strip().lower()
+
+    @staticmethod
+    def _keyword_score(text: str, keywords: tuple[str, ...]) -> int:
+        score = 0
+        for keyword in keywords:
+            if re.search(rf"\b{re.escape(keyword)}\b", text):
+                score += 1
+        return score
+
+
+class TeamComposer:
+    """Composes a capability-aligned team for a task profile."""
+
+    _MODE_REQUIREMENTS: dict[str, tuple[Capability, ...]] = {
+        "design": (Capability.PLANNING, Capability.ARCHITECTURE, Capability.VERIFICATION),
+        "implement": (Capability.PLANNING, Capability.IMPLEMENTATION, Capability.VERIFICATION),
+        "fix_bug": (Capability.EVALUATION, Capability.RESEARCH, Capability.IMPLEMENTATION, Capability.VERIFICATION),
+        "debug": (Capability.EVALUATION, Capability.RESEARCH, Capability.IMPLEMENTATION, Capability.VERIFICATION),
+        "refactor": (Capability.PLANNING, Capability.ARCHITECTURE, Capability.IMPLEMENTATION, Capability.VERIFICATION),
+    }
+
+    _ROLE_BY_CAPABILITY: dict[Capability, str] = {
+        Capability.PLANNING: "planner",
+        Capability.EVALUATION: "evaluator",
+        Capability.RESEARCH: "researcher",
+        Capability.ARCHITECTURE: "architect",
+        Capability.IMPLEMENTATION: "developer",
+        Capability.VERIFICATION: "verifier",
+        Capability.ORCHESTRATION: "orchestrator",
+        Capability.SECURITY: "security-reviewer",
+        Capability.TESTING: "test-engineer",
+        Capability.UNKNOWN: "generalist",
+    }
+
+    def compose(self, profile: TaskProfile, classified: Iterable[ClassifiedSkill]) -> TeamSpec:
+        """Select best skills for required capabilities in the resolved mode."""
+
+        resolved_mode = self._resolve_mode(profile)
+        required = self._MODE_REQUIREMENTS.get(resolved_mode, self._MODE_REQUIREMENTS["implement"])
+
+        pool = list(classified)
+        assignments: list[TeamAssignment] = []
+        fallback_reasons: list[str] = []
+
+        for capability in required:
+            selected = self._select_best_skill(pool, capability)
+            if not selected:
+                fallback_reasons.append(
+                    f"Missing capability '{capability.value}' for mode '{resolved_mode}'."
+                )
+                continue
+
+            confidence = selected.confidence_by_capability.get(capability, 0.0)
+            assignments.append(
+                TeamAssignment(
+                    role=self._ROLE_BY_CAPABILITY[capability],
+                    capability=capability,
+                    skill_id=selected.skill.id,
+                    confidence=confidence,
+                )
+            )
+
+        return TeamSpec(
+            mode=resolved_mode,
+            assignments=assignments,
+            fallback_required=bool(fallback_reasons),
+            fallback_reasons=fallback_reasons,
+        )
+
+    def _resolve_mode(self, profile: TaskProfile) -> str:
+        mode = profile.mode.strip().lower() or "auto"
+        if mode != "auto":
+            return mode
+
+        task = profile.task.lower()
+        if any(keyword in task for keyword in ("bug", "fix", "broken", "error", "regression")):
+            return "fix_bug"
+        if any(keyword in task for keyword in ("debug", "trace", "diagnose")):
+            return "debug"
+        if any(keyword in task for keyword in ("refactor", "clean up", "modernize")):
+            return "refactor"
+        if any(keyword in task for keyword in ("design", "architecture", "proposal")):
+            return "design"
+        return "implement"
+
+    @staticmethod
+    def _select_best_skill(
+        classified: Iterable[ClassifiedSkill], capability: Capability
+    ) -> ClassifiedSkill | None:
+        ranked = [
+            item
+            for item in classified
+            if capability in item.capabilities
+        ]
+        if not ranked:
+            return None
+        return sorted(
+            ranked,
+            key=lambda item: item.confidence_by_capability.get(capability, 0.0),
+            reverse=True,
+        )[0]
+
+
+class DagPlanner:
+    """Converts TeamSpec into a cycle-safe DAG execution plan."""
+
+    _MODE_EDGES: dict[str, tuple[tuple[str, str], ...]] = {
+        "design": (("planner", "architect"), ("architect", "verifier")),
+        "implement": (("planner", "developer"), ("developer", "verifier")),
+        "fix_bug": (("evaluator", "researcher"), ("researcher", "developer"), ("developer", "verifier")),
+        "debug": (("evaluator", "researcher"), ("researcher", "developer"), ("developer", "verifier")),
+        "refactor": (("planner", "architect"), ("architect", "developer"), ("developer", "verifier")),
+    }
+
+    def plan(self, team_spec: TeamSpec) -> DagPlan:
+        """Build and validate DAG plan from team assignments."""
+
+        node_by_role: dict[str, DagNode] = {}
+        for assignment in team_spec.assignments:
+            node_by_role[assignment.role] = DagNode(
+                id=assignment.role,
+                role=assignment.role,
+                skill_id=assignment.skill_id,
+                depends_on=(),
+            )
+
+        edge_template = self._MODE_EDGES.get(team_spec.mode, self._MODE_EDGES["implement"])
+        depends_map: dict[str, set[str]] = {role: set() for role in node_by_role.keys()}
+        for source, target in edge_template:
+            if source in node_by_role and target in node_by_role:
+                depends_map[target].add(source)
+
+        # If no edges are created (e.g., reduced team), chain deterministically.
+        if all(not deps for deps in depends_map.values()) and len(node_by_role) > 1:
+            ordered_roles = sorted(node_by_role.keys())
+            for idx in range(1, len(ordered_roles)):
+                depends_map[ordered_roles[idx]].add(ordered_roles[idx - 1])
+
+        nodes = [
+            DagNode(
+                id=node.id,
+                role=node.role,
+                skill_id=node.skill_id,
+                depends_on=tuple(sorted(depends_map.get(node.role, set()))),
+            )
+            for node in node_by_role.values()
+        ]
+
+        order = self._topological_sort(nodes)
+        return DagPlan(nodes=sorted(nodes, key=lambda n: n.id), execution_order=order)
+
+    @staticmethod
+    def _topological_sort(nodes: list[DagNode]) -> list[str]:
+        node_ids = {node.id for node in nodes}
+        indegree: dict[str, int] = {node_id: 0 for node_id in node_ids}
+        adjacency: dict[str, set[str]] = {node_id: set() for node_id in node_ids}
+
+        for node in nodes:
+            for dep in node.depends_on:
+                if dep not in node_ids:
+                    continue
+                indegree[node.id] += 1
+                adjacency[dep].add(node.id)
+
+        queue = sorted([node_id for node_id, degree in indegree.items() if degree == 0])
+        order: list[str] = []
+
+        while queue:
+            current = queue.pop(0)
+            order.append(current)
+            for nxt in sorted(adjacency[current]):
+                indegree[nxt] -= 1
+                if indegree[nxt] == 0:
+                    queue.append(nxt)
+
+        if len(order) != len(nodes):
+            raise ValueError("Cycle detected while building DAG plan.")
+
+        return order
+
+
+def build_dynamic_planning_result(
+    task: str,
+    mode: str = "auto",
+    registry: SkillRegistry | None = None,
+    classifier: RuleBasedSkillClassifier | None = None,
+    composer: TeamComposer | None = None,
+    planner: DagPlanner | None = None,
+) -> DynamicPlanningResult:
+    """Create full dynamic planning output for orchestration execution loops."""
+
+    registry = registry or build_default_registry()
+    classifier = classifier or RuleBasedSkillClassifier()
+    composer = composer or TeamComposer()
+    planner = planner or DagPlanner()
+
+    discovered = registry.discover()
+    classified = classifier.classify(discovered)
+    team_spec = composer.compose(TaskProfile(task=task, mode=mode), classified)
+    dag_plan = planner.plan(team_spec)
+
+    return DynamicPlanningResult(
+        task=task,
+        requested_mode=mode,
+        discovered_skills=discovered,
+        classified_skills=classified,
+        team_spec=team_spec,
+        dag_plan=dag_plan,
+    )
