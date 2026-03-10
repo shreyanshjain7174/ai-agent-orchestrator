@@ -216,7 +216,10 @@ If fresh discovery fails, the system gracefully falls back to cached inventory.
 Legacy settings continue to work, but they now emit deprecation warnings and are translated to canonical dynamic settings.
 
 - Migration matrix: `docs/migration-matrix.md`
+- Architecture: `docs/dynamic-orchestration-architecture.md`
+- Operations runbook: `docs/operations-runbook.md`
 - Planning/runtime legacy fallback diagnostics are included in `autonomous_execute` response under `fallback.diagnostics`
+- `autonomous_execute` now includes additive `correlation_id` and `telemetry` fields for discovery success rate, classifier confidence, DAG latency, and fallback rate
 - Safe rollout recommendation: use `execution_mode=auto` with `enable_legacy_fallback=true`
 
 #### Option 1: GitHub Models (Free Tier - Development)
@@ -480,6 +483,10 @@ ai-agent-orchestrator/
 ├── autonomous_orchestrator.py  # Autonomous PEGEV workflow
 ├── dynamic_orchestration.py # Dynamic skill discovery/classification/composition/DAG core
 ├── mcp_server.py            # MCP tools and loop execution API
+├── docs/
+│   ├── migration-matrix.md  # Legacy-to-canonical compatibility matrix
+│   ├── dynamic-orchestration-architecture.md # Dynamic execution architecture and observability
+│   └── operations-runbook.md # Rollout, rollback, and troubleshooting guide
 ├── requirements.txt         # Python dependencies
 ├── pyproject.toml           # Packaging, scripts, test extras
 ├── tests/                   # Deterministic unit/integration/failure tests

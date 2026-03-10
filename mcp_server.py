@@ -7,10 +7,14 @@ Two modes available:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
+import time
+from contextvars import ContextVar
 from functools import lru_cache
 from typing import Any, Literal
+from uuid import uuid4
 
 from agent_framework import AgentExecutorRequest, ChatMessage, WorkflowOutputEvent, WorkflowStatusEvent
 from mcp.server.fastmcp import FastMCP
@@ -58,6 +62,90 @@ _EXECUTION_MODE_ALIASES: dict[str, str] = {
 
 _TRUE_BOOL_VALUES = {"1", "true", "yes", "on"}
 _FALSE_BOOL_VALUES = {"0", "false", "no", "off"}
+
+_AUTONOMOUS_CORRELATION_ID: ContextVar[str | None] = ContextVar(
+    "autonomous_correlation_id",
+    default=None,
+)
+_AUTONOMOUS_LOOP_INDEX: ContextVar[int | None] = ContextVar(
+    "autonomous_loop_index",
+    default=None,
+)
+
+
+def _safe_rate(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(float(numerator) / float(denominator), 4)
+
+
+def _mean_metric(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    return round(sum(values) / len(values), 4)
+
+
+def _log_structured_event(event: str, **fields: Any) -> None:
+    payload = {
+        "event": event,
+        "correlation_id": _AUTONOMOUS_CORRELATION_ID.get(),
+    }
+    payload.update(fields)
+    logger.info("[Autonomous][Structured] %s", json.dumps(payload, sort_keys=True, default=str))
+
+
+def _build_planning_telemetry(planning_payload: dict[str, Any], dag_latency_ms: float) -> dict[str, float]:
+    discovered = planning_payload.get("discovered_skills", [])
+    if not isinstance(discovered, list):
+        discovered = []
+
+    discovered_success = sum(
+        1
+        for item in discovered
+        if isinstance(item, dict) and str(item.get("health", "unknown")).lower() != "unhealthy"
+    )
+
+    classified = planning_payload.get("classified_skills", [])
+    confidence_scores: list[float] = []
+    if isinstance(classified, list):
+        for item in classified:
+            if not isinstance(item, dict):
+                continue
+            confidence = item.get("confidence", {})
+            if not isinstance(confidence, dict):
+                continue
+            for score in confidence.values():
+                try:
+                    confidence_scores.append(float(score))
+                except (TypeError, ValueError):
+                    continue
+
+    return {
+        "discovery_success_rate": _safe_rate(discovered_success, len(discovered)),
+        "classification_confidence": _mean_metric(confidence_scores),
+        "dag_latency_ms": round(max(0.0, dag_latency_ms), 3),
+    }
+
+
+def _aggregate_telemetry(
+    loop_metrics: list[dict[str, float]],
+    *,
+    loops_executed: int,
+    fallback_triggered: bool,
+) -> dict[str, Any]:
+    discovery_values = [item.get("discovery_success_rate", 0.0) for item in loop_metrics]
+    classification_values = [item.get("classification_confidence", 0.0) for item in loop_metrics]
+    dag_latency_values = [item.get("dag_latency_ms", 0.0) for item in loop_metrics]
+
+    dag_latency_ms = _mean_metric(dag_latency_values)
+    return {
+        "discovery_success_rate": _mean_metric(discovery_values),
+        "classification_confidence": _mean_metric(classification_values),
+        "dag_latency_ms": dag_latency_ms,
+        "dag_latency": round(dag_latency_ms / 1000.0, 6),
+        "fallback_rate": _safe_rate(1 if fallback_triggered else 0, max(1, loops_executed)),
+        "loop_metrics": loop_metrics,
+    }
 
 
 def _translate_setting_alias(value: str, aliases: dict[str, str], setting_name: str) -> str:
@@ -270,12 +358,27 @@ async def _collect_autonomous_run(task_prompt: str, execution_order: list[str] |
             if "Phase:" in output:
                 phase = output.split("Phase:")[1].split("\n")[0].strip()
                 if phase not in phases:
+                    previous_phase = phases[-1] if phases else None
                     phases.append(phase)
+                    _log_structured_event(
+                        "phase.transition",
+                        loop=_AUTONOMOUS_LOOP_INDEX.get(),
+                        previous_phase=previous_phase,
+                        phase=phase,
+                    )
         elif isinstance(event, WorkflowStatusEvent):
             statuses.append(str(event.state))
 
     final_status = statuses[-1] if statuses else "unknown"
     completed = "COMPLETE" in final_status.upper()
+
+    _log_structured_event(
+        "loop.completed",
+        loop=_AUTONOMOUS_LOOP_INDEX.get(),
+        final_status=final_status,
+        completed=completed,
+        phase_count=len(phases),
+    )
 
     return {
         "phases_executed": phases,
@@ -348,24 +451,54 @@ async def autonomous_execute(
     )
     enable_legacy_fallback = _translate_bool_alias(enable_legacy_fallback, "enable_legacy_fallback")
 
+    correlation_id = uuid4().hex
+    _AUTONOMOUS_CORRELATION_ID.set(correlation_id)
+    _AUTONOMOUS_LOOP_INDEX.set(None)
+
     logger.info(
-        "[Autonomous] Starting execution | mode=%s execution_mode=%s loops=%s",
+        "[Autonomous] Starting execution | correlation_id=%s mode=%s execution_mode=%s loops=%s",
+        correlation_id,
         mode,
         execution_mode,
         max_loops,
     )
 
     loop_count = max(1, min(max_loops, 5))
+    loop_telemetry: list[dict[str, float]] = []
+
+    _log_structured_event(
+        "autonomous.start",
+        requested_mode=requested_mode,
+        resolved_mode=mode,
+        execution_mode=execution_mode,
+        loops_requested=loop_count,
+        enable_legacy_fallback=enable_legacy_fallback,
+    )
 
     if execution_mode == "legacy":
         legacy_result = await orchestrate_task(task)
+        legacy_status = str(legacy_result.get("final_status", "legacy_unknown"))
+        telemetry = _aggregate_telemetry(
+            loop_telemetry,
+            loops_executed=1,
+            fallback_triggered=False,
+        )
 
         memory = MemorySystem()
         recent_learnings = memory.memories[-5:] if memory.memories else []
 
+        _log_structured_event(
+            "autonomous.completed",
+            effective_mode="legacy",
+            loops_executed=1,
+            fallback_triggered=False,
+            final_status=legacy_status,
+        )
+
         return {
             "mode": mode,
             "effective_mode": "legacy",
+            "correlation_id": correlation_id,
             "loops_requested": loop_count,
             "loops_executed": 1,
             "loop_history": [
@@ -386,7 +519,7 @@ async def autonomous_execute(
                 }
             ],
             "phases_executed": [],
-            "final_status": str(legacy_result.get("final_status", "legacy_unknown")),
+            "final_status": legacy_status,
             "iteration_count": 0,
             "outputs": legacy_result.get("outputs", []),
             "recent_learnings": [
@@ -404,6 +537,7 @@ async def autonomous_execute(
                 "legacy_result": legacy_result,
                 "diagnostics": None,
             },
+            "telemetry": telemetry,
         }
 
     planning_registry = build_default_registry()
@@ -427,9 +561,26 @@ async def autonomous_execute(
     }
 
     for loop_index in range(loop_count):
+        planning_started = time.perf_counter()
         planning = build_dynamic_planning_result(task=task, mode=mode, registry=planning_registry)
+        planning_latency_ms = (time.perf_counter() - planning_started) * 1000.0
+        planning_payload = planning.to_dict()
         effective_mode = planning.team_spec.mode if mode == "auto" else mode
         last_mode = effective_mode
+
+        loop_metric = _build_planning_telemetry(planning_payload, planning_latency_ms)
+        loop_telemetry.append(loop_metric)
+
+        _log_structured_event(
+            "planning.completed",
+            loop=loop_index + 1,
+            requested_mode=requested_mode,
+            resolved_mode=effective_mode,
+            fallback_required=planning.team_spec.fallback_required,
+            discovery_success_rate=loop_metric["discovery_success_rate"],
+            classification_confidence=loop_metric["classification_confidence"],
+            dag_latency_ms=loop_metric["dag_latency_ms"],
+        )
 
         if planning.team_spec.fallback_required and not fallback_allowed:
             logger.warning(
@@ -453,8 +604,16 @@ async def autonomous_execute(
                 "[Autonomous][Fallback][planning->legacy] Triggering legacy fallback | diagnostics=%s",
                 diagnostics,
             )
+            _log_structured_event(
+                "fallback.triggered",
+                loop=loop_index + 1,
+                branch="planning",
+                reason=reason,
+                mode_used="legacy",
+            )
 
             legacy_result = await orchestrate_task(task)
+            legacy_status = str(legacy_result.get("final_status", "legacy_unknown"))
             fallback = {
                 "triggered": True,
                 "reason": reason,
@@ -466,7 +625,8 @@ async def autonomous_execute(
                 {
                     "loop": loop_index + 1,
                     "resolved_mode": effective_mode,
-                    "planning": planning.to_dict(),
+                    "planning": planning_payload,
+                    "telemetry": loop_metric,
                     "run": {
                         "phases_executed": [],
                         "final_status": "legacy_fallback",
@@ -480,15 +640,29 @@ async def autonomous_execute(
             # Load memory to show learnings
             memory = MemorySystem()
             recent_learnings = memory.memories[-5:] if memory.memories else []
+            telemetry = _aggregate_telemetry(
+                loop_telemetry,
+                loops_executed=len(loop_history),
+                fallback_triggered=True,
+            )
+
+            _log_structured_event(
+                "autonomous.completed",
+                effective_mode="legacy",
+                loops_executed=len(loop_history),
+                fallback_triggered=True,
+                final_status=legacy_status,
+            )
 
             return {
                 "mode": mode,
                 "effective_mode": "legacy",
+                "correlation_id": correlation_id,
                 "loops_requested": loop_count,
                 "loops_executed": len(loop_history),
                 "loop_history": loop_history,
                 "phases_executed": [],
-                "final_status": str(legacy_result.get("final_status", "legacy_unknown")),
+                "final_status": legacy_status,
                 "iteration_count": 0,
                 "outputs": legacy_result.get("outputs", []),
                 "recent_learnings": [
@@ -500,6 +674,7 @@ async def autonomous_execute(
                     "verified": False,
                 },
                 "fallback": fallback,
+                "telemetry": telemetry,
             }
 
         # Embed planning context in the prompt so each loop can self-correct.
@@ -509,6 +684,7 @@ async def autonomous_execute(
             f"[DAG_ORDER: {', '.join(planning.dag_plan.execution_order)}]\n\n"
             f"{task}"
         )
+        _AUTONOMOUS_LOOP_INDEX.set(loop_index + 1)
         try:
             run_result = await _collect_autonomous_run(
                 task_prompt,
@@ -529,8 +705,16 @@ async def autonomous_execute(
                     "[Autonomous][Fallback][runtime->legacy] Triggering legacy fallback | diagnostics=%s",
                     diagnostics,
                 )
+                _log_structured_event(
+                    "fallback.triggered",
+                    loop=loop_index + 1,
+                    branch="runtime",
+                    reason=reason,
+                    mode_used="legacy",
+                )
 
                 legacy_result = await orchestrate_task(task)
+                legacy_status = str(legacy_result.get("final_status", "legacy_unknown"))
                 fallback = {
                     "triggered": True,
                     "reason": reason,
@@ -541,15 +725,29 @@ async def autonomous_execute(
                 # Load memory to show learnings
                 memory = MemorySystem()
                 recent_learnings = memory.memories[-5:] if memory.memories else []
+                telemetry = _aggregate_telemetry(
+                    loop_telemetry,
+                    loops_executed=len(loop_history),
+                    fallback_triggered=True,
+                )
+
+                _log_structured_event(
+                    "autonomous.completed",
+                    effective_mode="legacy",
+                    loops_executed=len(loop_history),
+                    fallback_triggered=True,
+                    final_status=legacy_status,
+                )
 
                 return {
                     "mode": mode,
                     "effective_mode": "legacy",
+                    "correlation_id": correlation_id,
                     "loops_requested": loop_count,
                     "loops_executed": len(loop_history),
                     "loop_history": loop_history,
                     "phases_executed": [],
-                    "final_status": str(legacy_result.get("final_status", "legacy_unknown")),
+                    "final_status": legacy_status,
                     "iteration_count": 0,
                     "outputs": legacy_result.get("outputs", []),
                     "recent_learnings": [
@@ -561,8 +759,15 @@ async def autonomous_execute(
                         "verified": False,
                     },
                     "fallback": fallback,
+                    "telemetry": telemetry,
                 }
 
+            _log_structured_event(
+                "loop.error",
+                loop=loop_index + 1,
+                error=str(exc),
+                fallback_allowed=fallback_allowed,
+            )
             run_result = {
                 "phases_executed": [],
                 "final_status": f"dynamic_error: {exc}",
@@ -576,7 +781,8 @@ async def autonomous_execute(
             {
                 "loop": loop_index + 1,
                 "resolved_mode": effective_mode,
-                "planning": planning.to_dict(),
+                "planning": planning_payload,
+                "telemetry": loop_metric,
                 "run": run_result,
             }
         )
@@ -587,10 +793,24 @@ async def autonomous_execute(
     # Load memory to show learnings
     memory = MemorySystem()
     recent_learnings = memory.memories[-5:] if memory.memories else []
+    telemetry = _aggregate_telemetry(
+        loop_telemetry,
+        loops_executed=len(loop_history),
+        fallback_triggered=fallback["triggered"],
+    )
+
+    _log_structured_event(
+        "autonomous.completed",
+        effective_mode=last_mode,
+        loops_executed=len(loop_history),
+        fallback_triggered=fallback["triggered"],
+        final_status=last_run["final_status"],
+    )
 
     return {
         "mode": mode,
         "effective_mode": last_mode,
+        "correlation_id": correlation_id,
         "loops_requested": loop_count,
         "loops_executed": len(loop_history),
         "loop_history": loop_history,
@@ -604,6 +824,7 @@ async def autonomous_execute(
         ],
         "success_indicators": last_run["success_indicators"],
         "fallback": fallback,
+        "telemetry": telemetry,
     }
 
 

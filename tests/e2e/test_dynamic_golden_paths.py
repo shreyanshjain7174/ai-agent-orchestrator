@@ -140,3 +140,10 @@ def test_autonomous_execute_golden_routing_e2e_lite(monkeypatch, case):
     assert result["effective_mode"] == case["expected_effective_mode"]
     assert result["fallback"]["triggered"] is case["expected_fallback_triggered"]
     assert result["fallback"]["mode_used"] == case["expected_fallback_mode"]
+    assert isinstance(result["correlation_id"], str)
+    assert result["correlation_id"]
+    assert "telemetry" in result
+    assert "discovery_success_rate" in result["telemetry"]
+    assert "classification_confidence" in result["telemetry"]
+    assert "dag_latency_ms" in result["telemetry"]
+    assert "fallback_rate" in result["telemetry"]

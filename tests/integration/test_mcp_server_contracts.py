@@ -2,6 +2,8 @@
 
 import asyncio
 import importlib
+import json
+import logging
 import sys
 import types
 from types import SimpleNamespace
@@ -195,7 +197,47 @@ def test_autonomous_execute_returns_loop_history_and_no_fallback_by_default():
     assert result["loops_requested"] == 2
     assert result["loops_executed"] >= 1
     assert isinstance(result["loop_history"], list)
+    assert isinstance(result["correlation_id"], str)
+    assert result["correlation_id"]
+    assert "telemetry" in result
+    assert result["telemetry"]["fallback_rate"] == 0.0
+    assert "discovery_success_rate" in result["telemetry"]
+    assert "classification_confidence" in result["telemetry"]
+    assert "dag_latency_ms" in result["telemetry"]
+    assert "loop_metrics" in result["telemetry"]
+    assert isinstance(result["telemetry"]["loop_metrics"], list)
     assert result["fallback"]["triggered"] is False
+
+
+def test_autonomous_execute_emits_structured_logs_with_correlation_and_phase(caplog):
+    mcp_server = _load_mcp_server_module()
+
+    with caplog.at_level(logging.INFO, logger="mcp_server"):
+        result = asyncio.run(
+            mcp_server.autonomous_execute(
+                "Implement endpoint with tests",
+                mode="auto",
+                max_loops=1,
+                enable_legacy_fallback=False,
+            )
+        )
+
+    prefix = "[Autonomous][Structured] "
+    payloads = []
+    for record in caplog.records:
+        message = record.getMessage()
+        if not message.startswith(prefix):
+            continue
+        payloads.append(json.loads(message[len(prefix):]))
+
+    assert payloads
+    assert any(item["event"] == "autonomous.start" for item in payloads)
+    assert any(item["event"] == "planning.completed" for item in payloads)
+    assert any(item["event"] == "phase.transition" for item in payloads)
+    assert any(item["event"] == "autonomous.completed" for item in payloads)
+
+    correlation_id = result["correlation_id"]
+    assert all(item.get("correlation_id") == correlation_id for item in payloads)
 
 
 def test_autonomous_execute_translates_legacy_setting_aliases(monkeypatch):
