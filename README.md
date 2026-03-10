@@ -261,6 +261,7 @@ uv run --prerelease=allow --with "mcp[cli]>=1.6.0,<2.0.0" --with-requirements re
 - `autonomous_execute` ⚡ - Run self-healing PEGEV loop
     - Modes: `auto`, `design`, `fix_bug`, `debug`, `implement`, `refactor`
     - Supports bounded loop retries with `max_loops` (1-5)
+    - Supports safe legacy fallback with `enable_legacy_fallback=true`
   - Auto-iterates until verified success
   - Learns from mistakes and self-corrects
 - `dynamic_plan_preview` - Preview dynamic skill classification, team composition, and DAG order before execution

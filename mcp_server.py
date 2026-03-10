@@ -185,9 +185,9 @@ def show_model_routing() -> dict[str, str]:
 # ==================== AUTONOMOUS ORCHESTRATOR TOOLS ====================
 
 
-async def _collect_autonomous_run(task_prompt: str) -> dict[str, Any]:
+async def _collect_autonomous_run(task_prompt: str, execution_order: list[str] | None = None) -> dict[str, Any]:
     """Execute one autonomous workflow run and collect structured telemetry."""
-    workflow = create_autonomous_workflow()
+    workflow = create_autonomous_workflow(execution_order=execution_order)
     outputs: list[str] = []
     statuses: list[str] = []
     phases: list[str] = []
@@ -238,6 +238,7 @@ async def autonomous_execute(
     task: str,
     mode: Literal["auto", "design", "fix_bug", "debug", "implement", "refactor"] = "implement",
     max_loops: int = 1,
+    enable_legacy_fallback: bool = True,
 ) -> dict[str, Any]:
     """Execute task using autonomous Plan-Eval-Gather-Execute-Verify loop with self-healing.
     
@@ -259,6 +260,7 @@ async def autonomous_execute(
         task: The user's request or problem to solve
         mode: Hint for the type of work (auto/design/fix_bug/debug/implement/refactor)
         max_loops: Maximum recovery loops before returning latest result (1-5)
+        enable_legacy_fallback: Fallback to legacy orchestrator when dynamic planning/runtime cannot proceed
     
     Returns:
         Dict with execution history, final output, learnings, and success status
@@ -277,11 +279,65 @@ async def autonomous_execute(
         "success_indicators": {"completed": False, "verified": False},
     }
     last_mode = mode
+    fallback: dict[str, Any] = {
+        "triggered": False,
+        "reason": "",
+        "mode_used": "dynamic",
+        "legacy_result": None,
+    }
 
     for loop_index in range(loop_count):
         planning = build_dynamic_planning_result(task=task, mode=mode, registry=planning_registry)
         effective_mode = planning.team_spec.mode if mode == "auto" else mode
         last_mode = effective_mode
+
+        if planning.team_spec.fallback_required and enable_legacy_fallback:
+            legacy_result = await orchestrate_task(task)
+            fallback = {
+                "triggered": True,
+                "reason": "; ".join(planning.team_spec.fallback_reasons),
+                "mode_used": "legacy",
+                "legacy_result": legacy_result,
+            }
+            loop_history.append(
+                {
+                    "loop": loop_index + 1,
+                    "resolved_mode": effective_mode,
+                    "planning": planning.to_dict(),
+                    "run": {
+                        "phases_executed": [],
+                        "final_status": "legacy_fallback",
+                        "iteration_count": 0,
+                        "outputs": [],
+                        "success_indicators": {"completed": True, "verified": False},
+                    },
+                }
+            )
+
+            # Load memory to show learnings
+            memory = MemorySystem()
+            recent_learnings = memory.memories[-5:] if memory.memories else []
+
+            return {
+                "mode": mode,
+                "effective_mode": "legacy",
+                "loops_requested": loop_count,
+                "loops_executed": len(loop_history),
+                "loop_history": loop_history,
+                "phases_executed": [],
+                "final_status": str(legacy_result.get("final_status", "legacy_unknown")),
+                "iteration_count": 0,
+                "outputs": legacy_result.get("outputs", []),
+                "recent_learnings": [
+                    {"issue": m.issue, "solution": m.solution, "outcome": m.outcome}
+                    for m in recent_learnings
+                ],
+                "success_indicators": {
+                    "completed": str(legacy_result.get("final_status", "")).lower() != "unknown",
+                    "verified": False,
+                },
+                "fallback": fallback,
+            }
 
         # Embed planning context in the prompt so each loop can self-correct.
         task_prompt = (
@@ -290,7 +346,52 @@ async def autonomous_execute(
             f"[DAG_ORDER: {', '.join(planning.dag_plan.execution_order)}]\n\n"
             f"{task}"
         )
-        run_result = await _collect_autonomous_run(task_prompt)
+        try:
+            run_result = await _collect_autonomous_run(
+                task_prompt,
+                execution_order=planning.dag_plan.execution_order,
+            )
+        except Exception as exc:
+            if enable_legacy_fallback:
+                legacy_result = await orchestrate_task(task)
+                fallback = {
+                    "triggered": True,
+                    "reason": f"dynamic runtime failure: {exc}",
+                    "mode_used": "legacy",
+                    "legacy_result": legacy_result,
+                }
+                # Load memory to show learnings
+                memory = MemorySystem()
+                recent_learnings = memory.memories[-5:] if memory.memories else []
+
+                return {
+                    "mode": mode,
+                    "effective_mode": "legacy",
+                    "loops_requested": loop_count,
+                    "loops_executed": len(loop_history),
+                    "loop_history": loop_history,
+                    "phases_executed": [],
+                    "final_status": str(legacy_result.get("final_status", "legacy_unknown")),
+                    "iteration_count": 0,
+                    "outputs": legacy_result.get("outputs", []),
+                    "recent_learnings": [
+                        {"issue": m.issue, "solution": m.solution, "outcome": m.outcome}
+                        for m in recent_learnings
+                    ],
+                    "success_indicators": {
+                        "completed": str(legacy_result.get("final_status", "")).lower() != "unknown",
+                        "verified": False,
+                    },
+                    "fallback": fallback,
+                }
+
+            run_result = {
+                "phases_executed": [],
+                "final_status": f"dynamic_error: {exc}",
+                "iteration_count": 0,
+                "outputs": [],
+                "success_indicators": {"completed": False, "verified": False},
+            }
         last_run = run_result
 
         loop_history.append(
@@ -324,6 +425,7 @@ async def autonomous_execute(
             for m in recent_learnings
         ],
         "success_indicators": last_run["success_indicators"],
+        "fallback": fallback,
     }
 
 
@@ -408,6 +510,7 @@ def show_autonomous_capabilities() -> dict[str, Any]:
             "dag_order_example": dynamic_demo.dag_plan.execution_order,
             "discovered_skill_count": len(dynamic_demo.discovered_skills),
             "preview_tool": "dynamic_plan_preview",
+            "legacy_fallback": True,
         },
         "model_routing": {
             "planner": os.getenv("PLANNER_MODEL", DEFAULT_PLANNER_MODEL),
