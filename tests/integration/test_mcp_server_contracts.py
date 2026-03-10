@@ -123,6 +123,42 @@ def _load_mcp_server_module():
     return importlib.import_module("mcp_server")
 
 
+class _FakePlanning:
+    def __init__(
+        self,
+        *,
+        mode: str = "design",
+        fallback_required: bool = False,
+        fallback_reasons: list[str] | None = None,
+        execution_order: list[str] | None = None,
+    ):
+        self.team_spec = SimpleNamespace(
+            mode=mode,
+            fallback_required=fallback_required,
+            fallback_reasons=fallback_reasons or [],
+        )
+        self.dag_plan = SimpleNamespace(execution_order=execution_order or ["planner", "developer"])
+
+    def to_dict(self):
+        return {
+            "requested_mode": "auto",
+            "resolved_mode": self.team_spec.mode,
+            "team_spec": {
+                "mode": self.team_spec.mode,
+                "fallback_required": self.team_spec.fallback_required,
+                "fallback_reasons": list(self.team_spec.fallback_reasons),
+                "assignments": [],
+            },
+            "dag_plan": {
+                "execution_order": list(self.dag_plan.execution_order),
+                "nodes": [],
+            },
+            "discovered_skills": [],
+            "classified_skills": [],
+            "task": "test",
+        }
+
+
 def test_dynamic_plan_preview_contract_shape():
     mcp_server = _load_mcp_server_module()
 
@@ -152,6 +188,51 @@ def test_autonomous_execute_returns_loop_history_and_no_fallback_by_default():
     assert result["loops_executed"] >= 1
     assert isinstance(result["loop_history"], list)
     assert result["fallback"]["triggered"] is False
+
+
+@pytest.mark.parametrize(
+    "execution_mode,mode,expected_effective_mode",
+    [
+        ("legacy", "implement", "legacy"),
+        ("dynamic", "design", "design"),
+        ("auto", "debug", "debug"),
+    ],
+)
+def test_autonomous_execute_execution_mode_matrix(
+    monkeypatch,
+    execution_mode,
+    mode,
+    expected_effective_mode,
+):
+    mcp_server = _load_mcp_server_module()
+
+    monkeypatch.setattr(
+        mcp_server,
+        "build_dynamic_planning_result",
+        lambda **_kwargs: _FakePlanning(mode=mode, fallback_required=False),
+    )
+
+    result = asyncio.run(
+        mcp_server.autonomous_execute(
+            f"Run representative {mode} task",
+            mode=mode,
+            execution_mode=execution_mode,
+            max_loops=1,
+            enable_legacy_fallback=True,
+        )
+    )
+
+    assert result["effective_mode"] == expected_effective_mode
+    assert result["loops_requested"] == 1
+    assert result["loops_executed"] == 1
+
+    if execution_mode == "legacy":
+        assert result["fallback"]["triggered"] is False
+        assert result["fallback"]["mode_used"] == "legacy"
+        assert result["final_status"] == "legacy-complete"
+    else:
+        assert result["fallback"]["triggered"] is False
+        assert result["success_indicators"]["completed"] is True
 
 
 def test_autonomous_execute_clamps_loop_count_to_minimum(monkeypatch):
@@ -233,40 +314,21 @@ def test_autonomous_execute_dynamic_mode_matrix_success(mode):
 def test_autonomous_execute_falls_back_when_planning_requires_fallback(monkeypatch):
     mcp_server = _load_mcp_server_module()
 
-    class _FakePlanning:
-        def __init__(self):
-            self.team_spec = SimpleNamespace(
-                mode="design",
-                fallback_required=True,
-                fallback_reasons=["Missing capability 'architecture'."],
-            )
-            self.dag_plan = SimpleNamespace(execution_order=["planner", "developer"])
-
-        def to_dict(self):
-            return {
-                "requested_mode": "auto",
-                "resolved_mode": "design",
-                "team_spec": {
-                    "mode": "design",
-                    "fallback_required": True,
-                    "fallback_reasons": ["Missing capability 'architecture'."],
-                    "assignments": [],
-                },
-                "dag_plan": {
-                    "execution_order": ["planner", "developer"],
-                    "nodes": [],
-                },
-                "discovered_skills": [],
-                "classified_skills": [],
-                "task": "test",
-            }
-
-    monkeypatch.setattr(mcp_server, "build_dynamic_planning_result", lambda **_kwargs: _FakePlanning())
+    monkeypatch.setattr(
+        mcp_server,
+        "build_dynamic_planning_result",
+        lambda **_kwargs: _FakePlanning(
+            mode="design",
+            fallback_required=True,
+            fallback_reasons=["Missing capability 'architecture'."],
+        ),
+    )
 
     result = asyncio.run(
         mcp_server.autonomous_execute(
             "Design auth service",
             mode="auto",
+            execution_mode="auto",
             max_loops=1,
             enable_legacy_fallback=True,
         )
@@ -276,6 +338,34 @@ def test_autonomous_execute_falls_back_when_planning_requires_fallback(monkeypat
     assert result["fallback"]["triggered"] is True
     assert result["fallback"]["mode_used"] == "legacy"
     assert result["final_status"] == "legacy-complete"
+
+
+def test_autonomous_execute_dynamic_mode_no_fallback_when_planning_requires_fallback(monkeypatch):
+    mcp_server = _load_mcp_server_module()
+
+    monkeypatch.setattr(
+        mcp_server,
+        "build_dynamic_planning_result",
+        lambda **_kwargs: _FakePlanning(
+            mode="design",
+            fallback_required=True,
+            fallback_reasons=["Missing capability 'architecture'."],
+        ),
+    )
+
+    result = asyncio.run(
+        mcp_server.autonomous_execute(
+            "Design auth service",
+            mode="auto",
+            execution_mode="dynamic",
+            max_loops=1,
+            enable_legacy_fallback=True,
+        )
+    )
+
+    assert result["effective_mode"] == "design"
+    assert result["fallback"]["triggered"] is False
+    assert result["final_status"] == "COMPLETE"
 
 
 def test_autonomous_execute_falls_back_on_runtime_exception(monkeypatch):
@@ -290,6 +380,7 @@ def test_autonomous_execute_falls_back_on_runtime_exception(monkeypatch):
         mcp_server.autonomous_execute(
             "Implement auth endpoint",
             mode="implement",
+            execution_mode="auto",
             max_loops=1,
             enable_legacy_fallback=True,
         )
@@ -298,3 +389,25 @@ def test_autonomous_execute_falls_back_on_runtime_exception(monkeypatch):
     assert result["fallback"]["triggered"] is True
     assert result["fallback"]["mode_used"] == "legacy"
     assert "dynamic runtime failure" in result["fallback"]["reason"]
+
+
+def test_autonomous_execute_dynamic_mode_runtime_exception_no_fallback(monkeypatch):
+    mcp_server = _load_mcp_server_module()
+
+    async def _raise(*_args, **_kwargs):
+        raise RuntimeError("workflow exploded")
+
+    monkeypatch.setattr(mcp_server, "_collect_autonomous_run", _raise)
+
+    result = asyncio.run(
+        mcp_server.autonomous_execute(
+            "Implement auth endpoint",
+            mode="implement",
+            execution_mode="dynamic",
+            max_loops=1,
+            enable_legacy_fallback=True,
+        )
+    )
+
+    assert result["fallback"]["triggered"] is False
+    assert result["final_status"].startswith("dynamic_error:")

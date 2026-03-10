@@ -290,8 +290,12 @@ uv run --prerelease=allow --with "mcp[cli]>=1.6.0,<2.0.0" --with-requirements re
 **Autonomous Mode (Recommended for complex tasks):**
 - `autonomous_execute` ⚡ - Run self-healing PEGEV loop
     - Modes: `auto`, `design`, `fix_bug`, `debug`, `implement`, `refactor`
+        - Execution paths: `legacy`, `dynamic`, `auto` (default)
+            - `legacy`: run legacy `orchestrate_task` directly
+            - `dynamic`: dynamic planning/execution only (no legacy fallback)
+            - `auto`: dynamic-first with optional legacy fallback
     - Supports bounded loop retries with `max_loops` (1-5)
-    - Supports safe legacy fallback with `enable_legacy_fallback=true`
+        - Supports safe legacy fallback with `enable_legacy_fallback=true` when `execution_mode=auto`
   - Auto-iterates until verified success
   - Learns from mistakes and self-corrects
 - `dynamic_plan_preview` - Preview dynamic skill classification, team composition, and DAG order before execution
@@ -302,6 +306,8 @@ uv run --prerelease=allow --with "mcp[cli]>=1.6.0,<2.0.0" --with-requirements re
 ```
 User: "Use autonomous_execute to design a secure user authentication API"
 User: "Fix this bug using autonomous_execute mode=fix_bug"
+User: "Run autonomous_execute execution_mode=legacy for strict legacy routing"
+User: "Run autonomous_execute mode=debug execution_mode=dynamic"
 User: "Preview the dynamic team with dynamic_plan_preview mode=auto"
 User: "Show me what the agents have learned with get_learnings"
 ```

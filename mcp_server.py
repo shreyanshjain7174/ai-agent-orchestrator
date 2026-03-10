@@ -237,6 +237,7 @@ def dynamic_plan_preview(
 async def autonomous_execute(
     task: str,
     mode: Literal["auto", "design", "fix_bug", "debug", "implement", "refactor"] = "implement",
+    execution_mode: Literal["legacy", "dynamic", "auto"] = "auto",
     max_loops: int = 1,
     enable_legacy_fallback: bool = True,
 ) -> dict[str, Any]:
@@ -259,16 +260,72 @@ async def autonomous_execute(
     Args:
         task: The user's request or problem to solve
         mode: Hint for the type of work (auto/design/fix_bug/debug/implement/refactor)
+        execution_mode: Orchestration path control (legacy/dynamic/auto)
         max_loops: Maximum recovery loops before returning latest result (1-5)
         enable_legacy_fallback: Fallback to legacy orchestrator when dynamic planning/runtime cannot proceed
     
     Returns:
         Dict with execution history, final output, learnings, and success status
     """
-    logger.info("[Autonomous] Starting execution | mode=%s loops=%s", mode, max_loops)
+    logger.info(
+        "[Autonomous] Starting execution | mode=%s execution_mode=%s loops=%s",
+        mode,
+        execution_mode,
+        max_loops,
+    )
 
     loop_count = max(1, min(max_loops, 5))
+
+    if execution_mode == "legacy":
+        legacy_result = await orchestrate_task(task)
+
+        memory = MemorySystem()
+        recent_learnings = memory.memories[-5:] if memory.memories else []
+
+        return {
+            "mode": mode,
+            "effective_mode": "legacy",
+            "loops_requested": loop_count,
+            "loops_executed": 1,
+            "loop_history": [
+                {
+                    "loop": 1,
+                    "resolved_mode": "legacy",
+                    "planning": None,
+                    "run": {
+                        "phases_executed": [],
+                        "final_status": str(legacy_result.get("final_status", "legacy_unknown")),
+                        "iteration_count": 0,
+                        "outputs": legacy_result.get("outputs", []),
+                        "success_indicators": {
+                            "completed": str(legacy_result.get("final_status", "")).lower() != "unknown",
+                            "verified": False,
+                        },
+                    },
+                }
+            ],
+            "phases_executed": [],
+            "final_status": str(legacy_result.get("final_status", "legacy_unknown")),
+            "iteration_count": 0,
+            "outputs": legacy_result.get("outputs", []),
+            "recent_learnings": [
+                {"issue": m.issue, "solution": m.solution, "outcome": m.outcome}
+                for m in recent_learnings
+            ],
+            "success_indicators": {
+                "completed": str(legacy_result.get("final_status", "")).lower() != "unknown",
+                "verified": False,
+            },
+            "fallback": {
+                "triggered": False,
+                "reason": "",
+                "mode_used": "legacy",
+                "legacy_result": legacy_result,
+            },
+        }
+
     planning_registry = build_default_registry()
+    fallback_allowed = execution_mode == "auto" and enable_legacy_fallback
 
     loop_history: list[dict[str, Any]] = []
     last_run: dict[str, Any] = {
@@ -291,7 +348,7 @@ async def autonomous_execute(
         effective_mode = planning.team_spec.mode if mode == "auto" else mode
         last_mode = effective_mode
 
-        if planning.team_spec.fallback_required and enable_legacy_fallback:
+        if planning.team_spec.fallback_required and fallback_allowed:
             legacy_result = await orchestrate_task(task)
             fallback = {
                 "triggered": True,
@@ -352,7 +409,7 @@ async def autonomous_execute(
                 execution_order=planning.dag_plan.execution_order,
             )
         except Exception as exc:
-            if enable_legacy_fallback:
+            if fallback_allowed:
                 legacy_result = await orchestrate_task(task)
                 fallback = {
                     "triggered": True,
