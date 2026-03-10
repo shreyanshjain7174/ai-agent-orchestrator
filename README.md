@@ -211,6 +211,14 @@ AI_ORCHESTRATOR_MAX_DAG_NODES=24
 Discovery schema is normalized to: `id`, `name`, `description`, `source`, `input_schema_summary`, and `health`.
 If fresh discovery fails, the system gracefully falls back to cached inventory.
 
+#### Migration and Backward Compatibility (Phase 8)
+
+Legacy settings continue to work, but they now emit deprecation warnings and are translated to canonical dynamic settings.
+
+- Migration matrix: `docs/migration-matrix.md`
+- Planning/runtime legacy fallback diagnostics are included in `autonomous_execute` response under `fallback.diagnostics`
+- Safe rollout recommendation: use `execution_mode=auto` with `enable_legacy_fallback=true`
+
 #### Option 1: GitHub Models (Free Tier - Development)
 
 Get a GitHub Personal Access Token:

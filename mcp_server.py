@@ -42,6 +42,77 @@ from dynamic_orchestration import build_default_registry, build_dynamic_planning
 
 logger = logging.getLogger(__name__)
 
+_MODE_ALIASES: dict[str, str] = {
+    "bugfix": "fix_bug",
+    "bug_fix": "fix_bug",
+    "implementation": "implement",
+}
+
+_EXECUTION_MODE_ALIASES: dict[str, str] = {
+    "static": "legacy",
+    "classic": "legacy",
+    "hybrid": "auto",
+    "adaptive": "auto",
+    "dynamic_only": "dynamic",
+}
+
+_TRUE_BOOL_VALUES = {"1", "true", "yes", "on"}
+_FALSE_BOOL_VALUES = {"0", "false", "no", "off"}
+
+
+def _translate_setting_alias(value: str, aliases: dict[str, str], setting_name: str) -> str:
+    normalized = str(value).strip().lower()
+    translated = aliases.get(normalized, normalized)
+    if translated != normalized:
+        logger.warning(
+            "[Autonomous][DEPRECATION] %s='%s' is deprecated; use '%s'.",
+            setting_name,
+            value,
+            translated,
+        )
+    return translated
+
+
+def _translate_bool_alias(value: bool | str, setting_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+
+    normalized = str(value).strip().lower()
+    if normalized in _TRUE_BOOL_VALUES:
+        logger.warning(
+            "[Autonomous][DEPRECATION] %s should be sent as boolean; accepted legacy string '%s'.",
+            setting_name,
+            value,
+        )
+        return True
+    if normalized in _FALSE_BOOL_VALUES:
+        logger.warning(
+            "[Autonomous][DEPRECATION] %s should be sent as boolean; accepted legacy string '%s'.",
+            setting_name,
+            value,
+        )
+        return False
+    return bool(value)
+
+
+def _build_fallback_diagnostics(
+    *,
+    branch: str,
+    reason: str,
+    loop_index: int,
+    requested_mode: str,
+    resolved_mode: str,
+    execution_mode: str,
+) -> dict[str, Any]:
+    return {
+        "branch": branch,
+        "reason": reason,
+        "loop": loop_index,
+        "requested_mode": requested_mode,
+        "resolved_mode": resolved_mode,
+        "execution_mode": execution_mode,
+    }
+
 # Backward-compatible alias for prior examples that used Message(role, text=...).
 Message = ChatMessage
 
@@ -229,6 +300,7 @@ def dynamic_plan_preview(
     inspect skill discovery, classification, role assignments, and execution DAG
     prior to actually running the autonomous loop.
     """
+    mode = _translate_setting_alias(mode, _MODE_ALIASES, "mode")
     planning = build_dynamic_planning_result(task=task, mode=mode, registry=build_default_registry())
     return planning.to_dict()
 
@@ -267,6 +339,15 @@ async def autonomous_execute(
     Returns:
         Dict with execution history, final output, learnings, and success status
     """
+    requested_mode = mode
+    mode = _translate_setting_alias(mode, _MODE_ALIASES, "mode")
+    execution_mode = _translate_setting_alias(
+        execution_mode,
+        _EXECUTION_MODE_ALIASES,
+        "execution_mode",
+    )
+    enable_legacy_fallback = _translate_bool_alias(enable_legacy_fallback, "enable_legacy_fallback")
+
     logger.info(
         "[Autonomous] Starting execution | mode=%s execution_mode=%s loops=%s",
         mode,
@@ -321,6 +402,7 @@ async def autonomous_execute(
                 "reason": "",
                 "mode_used": "legacy",
                 "legacy_result": legacy_result,
+                "diagnostics": None,
             },
         }
 
@@ -341,6 +423,7 @@ async def autonomous_execute(
         "reason": "",
         "mode_used": "dynamic",
         "legacy_result": None,
+        "diagnostics": None,
     }
 
     for loop_index in range(loop_count):
@@ -348,13 +431,36 @@ async def autonomous_execute(
         effective_mode = planning.team_spec.mode if mode == "auto" else mode
         last_mode = effective_mode
 
+        if planning.team_spec.fallback_required and not fallback_allowed:
+            logger.warning(
+                "[Autonomous][Fallback][planning] Dynamic planning requested fallback but legacy fallback is disabled | execution_mode=%s enable_legacy_fallback=%s reasons=%s",
+                execution_mode,
+                enable_legacy_fallback,
+                planning.team_spec.fallback_reasons,
+            )
+
         if planning.team_spec.fallback_required and fallback_allowed:
+            reason = "; ".join(planning.team_spec.fallback_reasons)
+            diagnostics = _build_fallback_diagnostics(
+                branch="planning",
+                reason=reason,
+                loop_index=loop_index + 1,
+                requested_mode=requested_mode,
+                resolved_mode=effective_mode,
+                execution_mode=execution_mode,
+            )
+            logger.warning(
+                "[Autonomous][Fallback][planning->legacy] Triggering legacy fallback | diagnostics=%s",
+                diagnostics,
+            )
+
             legacy_result = await orchestrate_task(task)
             fallback = {
                 "triggered": True,
-                "reason": "; ".join(planning.team_spec.fallback_reasons),
+                "reason": reason,
                 "mode_used": "legacy",
                 "legacy_result": legacy_result,
+                "diagnostics": diagnostics,
             }
             loop_history.append(
                 {
@@ -410,12 +516,27 @@ async def autonomous_execute(
             )
         except Exception as exc:
             if fallback_allowed:
+                reason = f"dynamic runtime failure: {exc}"
+                diagnostics = _build_fallback_diagnostics(
+                    branch="runtime",
+                    reason=reason,
+                    loop_index=loop_index + 1,
+                    requested_mode=requested_mode,
+                    resolved_mode=effective_mode,
+                    execution_mode=execution_mode,
+                )
+                logger.warning(
+                    "[Autonomous][Fallback][runtime->legacy] Triggering legacy fallback | diagnostics=%s",
+                    diagnostics,
+                )
+
                 legacy_result = await orchestrate_task(task)
                 fallback = {
                     "triggered": True,
-                    "reason": f"dynamic runtime failure: {exc}",
+                    "reason": reason,
                     "mode_used": "legacy",
                     "legacy_result": legacy_result,
+                    "diagnostics": diagnostics,
                 }
                 # Load memory to show learnings
                 memory = MemorySystem()

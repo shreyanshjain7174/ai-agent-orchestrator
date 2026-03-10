@@ -198,6 +198,29 @@ def test_autonomous_execute_returns_loop_history_and_no_fallback_by_default():
     assert result["fallback"]["triggered"] is False
 
 
+def test_autonomous_execute_translates_legacy_setting_aliases(monkeypatch):
+    mcp_server = _load_mcp_server_module()
+
+    monkeypatch.setattr(
+        mcp_server,
+        "build_dynamic_planning_result",
+        lambda **_kwargs: _FakePlanning(mode="fix_bug", fallback_required=False),
+    )
+
+    result = asyncio.run(
+        mcp_server.autonomous_execute(
+            "Fix regression in auth flow",
+            mode="bugfix",
+            execution_mode="hybrid",
+            max_loops=1,
+            enable_legacy_fallback="true",
+        )
+    )
+
+    assert result["effective_mode"] == "fix_bug"
+    assert result["fallback"]["triggered"] is False
+
+
 @pytest.mark.parametrize(
     "execution_mode,mode,expected_effective_mode",
     [
@@ -345,6 +368,8 @@ def test_autonomous_execute_falls_back_when_planning_requires_fallback(monkeypat
     assert result["effective_mode"] == "legacy"
     assert result["fallback"]["triggered"] is True
     assert result["fallback"]["mode_used"] == "legacy"
+    assert result["fallback"]["diagnostics"]["branch"] == "planning"
+    assert result["fallback"]["diagnostics"]["execution_mode"] == "auto"
     assert result["final_status"] == "legacy-complete"
 
 
@@ -396,6 +421,8 @@ def test_autonomous_execute_falls_back_on_runtime_exception(monkeypatch):
 
     assert result["fallback"]["triggered"] is True
     assert result["fallback"]["mode_used"] == "legacy"
+    assert result["fallback"]["diagnostics"]["branch"] == "runtime"
+    assert result["fallback"]["diagnostics"]["execution_mode"] == "auto"
     assert "dynamic runtime failure" in result["fallback"]["reason"]
 
 

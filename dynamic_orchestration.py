@@ -13,12 +13,43 @@ other projects and tested without LLM or MCP network calls.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import Callable, Iterable, Protocol
+
+
+logger = logging.getLogger(__name__)
+
+
+_LEGACY_ENV_ALIASES: dict[str, tuple[str, ...]] = {
+    "AI_ORCHESTRATOR_SKILLS_JSON": ("ORCHESTRATOR_SKILLS_JSON", "SKILLS_JSON"),
+    "AI_ORCHESTRATOR_ENABLE_SKILL_DISCOVERY": (
+        "ORCHESTRATOR_ENABLE_SKILL_DISCOVERY",
+        "ENABLE_SKILL_DISCOVERY",
+    ),
+    "AI_ORCHESTRATOR_DISCOVERY_RETRY_ATTEMPTS": (
+        "ORCHESTRATOR_DISCOVERY_RETRY_ATTEMPTS",
+        "DISCOVERY_RETRY_ATTEMPTS",
+    ),
+    "AI_ORCHESTRATOR_DISCOVERY_TTL_SECONDS": (
+        "ORCHESTRATOR_DISCOVERY_TTL_SECONDS",
+        "DISCOVERY_TTL_SECONDS",
+    ),
+    "AI_ORCHESTRATOR_CLASSIFIER_MIN_CONFIDENCE": (
+        "ORCHESTRATOR_CLASSIFIER_MIN_CONFIDENCE",
+        "CLASSIFIER_MIN_CONFIDENCE",
+    ),
+    "AI_ORCHESTRATOR_MAX_TEAM_SIZE": ("ORCHESTRATOR_MAX_TEAM_SIZE", "MAX_TEAM_SIZE"),
+    "AI_ORCHESTRATOR_DAG_MODE": ("ORCHESTRATOR_DAG_MODE", "DAG_MODE"),
+    "AI_ORCHESTRATOR_MAX_DAG_NODES": ("ORCHESTRATOR_MAX_DAG_NODES", "MAX_DAG_NODES"),
+}
+
+_TRUE_BOOL_VALUES = {"1", "true", "yes", "on"}
+_FALSE_BOOL_VALUES = {"0", "false", "no", "off"}
 
 
 class Capability(str, Enum):
@@ -295,7 +326,7 @@ class EnvSkillRegistry:
         self.env_var = env_var
 
     def discover(self) -> list[SkillMetadata]:
-        raw = os.getenv(self.env_var, "").strip()
+        raw = (_env_raw(self.env_var) or "").strip()
         if not raw:
             return []
 
@@ -429,7 +460,7 @@ def default_static_skills() -> list[SkillMetadata]:
 
 
 def _env_int(name: str, default: int) -> int:
-    value = os.getenv(name)
+    value = _env_raw(name)
     if value is None:
         return default
     try:
@@ -439,7 +470,7 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _env_float(name: str, default: float) -> float:
-    value = os.getenv(name)
+    value = _env_raw(name)
     if value is None:
         return default
     try:
@@ -448,17 +479,52 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    value = _env_raw(name)
+    if value is None:
+        return default
+
+    normalized = value.strip().lower()
+    if normalized in _TRUE_BOOL_VALUES:
+        return True
+    if normalized in _FALSE_BOOL_VALUES:
+        return False
+    return default
+
+
+def _env_raw(name: str) -> str | None:
+    canonical_value = os.getenv(name)
+    if canonical_value is not None:
+        return canonical_value
+
+    for legacy_name in _LEGACY_ENV_ALIASES.get(name, ()):
+        legacy_value = os.getenv(legacy_name)
+        if legacy_value is None:
+            continue
+        logger.warning(
+            "[DynamicConfig][DEPRECATION] %s is deprecated; use %s.",
+            legacy_name,
+            name,
+        )
+        return legacy_value
+
+    return None
+
+
 def build_default_registry() -> SkillRegistry:
     """Build production-safe default registry with env overrides and builtins."""
 
+    enable_skill_discovery = _env_bool("AI_ORCHESTRATOR_ENABLE_SKILL_DISCOVERY", True)
     retry_attempts = _env_int("AI_ORCHESTRATOR_DISCOVERY_RETRY_ATTEMPTS", 1)
     ttl_seconds = _env_float("AI_ORCHESTRATOR_DISCOVERY_TTL_SECONDS", 60.0)
 
+    registries: list[SkillRegistry] = []
+    if enable_skill_discovery:
+        registries.append(EnvSkillRegistry())
+    registries.append(StaticSkillRegistry(default_static_skills()))
+
     composite = CompositeSkillRegistry(
-        [
-            EnvSkillRegistry(),
-            StaticSkillRegistry(default_static_skills()),
-        ],
+        registries,
         retry_attempts=retry_attempts,
     )
     return CachedSkillRegistry(
@@ -758,7 +824,7 @@ class DagPlanner:
     }
 
     def __init__(self, dynamic_edges: bool | None = None, max_nodes: int | None = None):
-        dag_mode = os.getenv("AI_ORCHESTRATOR_DAG_MODE", "dynamic").strip().lower()
+        dag_mode = (_env_raw("AI_ORCHESTRATOR_DAG_MODE") or "dynamic").strip().lower()
         self.dynamic_edges = (
             dag_mode != "static"
             if dynamic_edges is None
