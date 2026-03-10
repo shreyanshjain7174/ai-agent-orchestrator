@@ -483,6 +483,22 @@ class RuleBasedSkillClassifier:
         Capability.TESTING: ("testing", "pytest", "mock", "fixture", "coverage"),
     }
 
+    def __init__(
+        self,
+        min_confidence: float | None = None,
+        base_confidence: float = 0.5,
+        keyword_weight: float = 0.1,
+        unknown_confidence: float = 0.6,
+    ):
+        self.min_confidence = self._clamp_confidence(
+            min_confidence
+            if min_confidence is not None
+            else _env_float("AI_ORCHESTRATOR_CLASSIFIER_MIN_CONFIDENCE", 0.6)
+        )
+        self.base_confidence = self._clamp_confidence(base_confidence)
+        self.keyword_weight = max(0.0, float(keyword_weight))
+        self.unknown_confidence = self._clamp_confidence(unknown_confidence)
+
     def classify(self, skills: Iterable[SkillMetadata]) -> list[ClassifiedSkill]:
         """Classify skills with deterministic confidence values."""
 
@@ -495,10 +511,13 @@ class RuleBasedSkillClassifier:
                 score = self._keyword_score(normalized, keywords)
                 if score <= 0:
                     continue
-                confidence[capability] = min(0.99, 0.5 + (0.1 * score))
+                capability_confidence = min(0.99, self.base_confidence + (self.keyword_weight * score))
+                if capability_confidence < self.min_confidence:
+                    continue
+                confidence[capability] = capability_confidence
 
             if not confidence:
-                confidence = {Capability.UNKNOWN: 0.6}
+                confidence = {Capability.UNKNOWN: self.unknown_confidence}
 
             ordered_caps = tuple(
                 sorted(confidence.keys(), key=lambda c: confidence[c], reverse=True)
@@ -525,6 +544,10 @@ class RuleBasedSkillClassifier:
             if re.search(rf"\b{re.escape(keyword)}\b", text):
                 score += 1
         return score
+
+    @staticmethod
+    def _clamp_confidence(value: float) -> float:
+        return max(0.0, min(1.0, float(value)))
 
 
 class TeamComposer:

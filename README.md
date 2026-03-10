@@ -192,6 +192,9 @@ AI_ORCHESTRATOR_SKILLS_JSON=[{"id":"python-pro","name":"Python Pro","description
 # Discovery resilience controls
 AI_ORCHESTRATOR_DISCOVERY_RETRY_ATTEMPTS=1
 AI_ORCHESTRATOR_DISCOVERY_TTL_SECONDS=60
+
+# Classification confidence threshold (0.0-1.0)
+AI_ORCHESTRATOR_CLASSIFIER_MIN_CONFIDENCE=0.6
 ```
 
 Discovery schema is normalized to: `id`, `name`, `description`, `source`, `input_schema_summary`, and `health`.
