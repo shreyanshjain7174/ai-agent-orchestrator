@@ -195,6 +195,8 @@ def test_autonomous_execute_returns_loop_history_and_no_fallback_by_default():
     )
 
     assert result["loops_requested"] == 2
+    assert result["loops_requested_raw"] == 2
+    assert result["loops_clamped"] is False
     assert result["loops_executed"] >= 1
     assert isinstance(result["loop_history"], list)
     assert isinstance(result["correlation_id"], str)
@@ -261,6 +263,28 @@ def test_autonomous_execute_translates_legacy_setting_aliases(monkeypatch):
 
     assert result["effective_mode"] == "fix_bug"
     assert result["fallback"]["triggered"] is False
+
+
+def test_dynamic_plan_preview_rejects_invalid_mode():
+    mcp_server = _load_mcp_server_module()
+
+    with pytest.raises(ValueError, match="Invalid mode"):
+        mcp_server.dynamic_plan_preview("Implement endpoint", mode="unsupported")
+
+
+def test_autonomous_execute_rejects_invalid_execution_mode():
+    mcp_server = _load_mcp_server_module()
+
+    with pytest.raises(ValueError, match="Invalid execution_mode"):
+        asyncio.run(
+            mcp_server.autonomous_execute(
+                "Implement endpoint",
+                mode="implement",
+                execution_mode="unsupported",
+                max_loops=1,
+                enable_legacy_fallback=True,
+            )
+        )
 
 
 @pytest.mark.parametrize(
@@ -333,6 +357,8 @@ def test_autonomous_execute_clamps_loop_count_to_minimum(monkeypatch):
     )
 
     assert result["loops_requested"] == 1
+    assert result["loops_requested_raw"] == 0
+    assert result["loops_clamped"] is True
     assert result["loops_executed"] == 1
 
 
@@ -361,6 +387,8 @@ def test_autonomous_execute_clamps_loop_count_to_maximum(monkeypatch):
     )
 
     assert result["loops_requested"] == 5
+    assert result["loops_requested_raw"] == 999
+    assert result["loops_clamped"] is True
     assert result["loops_executed"] == 5
 
 
@@ -441,6 +469,66 @@ def test_autonomous_execute_dynamic_mode_no_fallback_when_planning_requires_fall
     assert result["effective_mode"] == "design"
     assert result["fallback"]["triggered"] is False
     assert result["final_status"] == "COMPLETE"
+
+
+def test_autonomous_execute_invalid_execution_order_without_fallback_returns_dynamic_error(monkeypatch):
+    mcp_server = _load_mcp_server_module()
+
+    monkeypatch.setattr(
+        mcp_server,
+        "build_dynamic_planning_result",
+        lambda **_kwargs: _FakePlanning(
+            mode="design",
+            fallback_required=False,
+            execution_order=["unsupported-role"],
+        ),
+    )
+
+    result = asyncio.run(
+        mcp_server.autonomous_execute(
+            "Design auth service",
+            mode="auto",
+            execution_mode="dynamic",
+            max_loops=1,
+            enable_legacy_fallback=True,
+        )
+    )
+
+    assert result["fallback"]["triggered"] is False
+    assert result["final_status"].startswith("dynamic_error:")
+    assert "execution_order invalid" in result["final_status"]
+    assert result["telemetry"]["execution_order_valid_ratio"] == 0.0
+    assert result["loop_history"][0]["telemetry"]["execution_order_valid_ratio"] == 0.0
+
+
+def test_autonomous_execute_invalid_execution_order_with_fallback_uses_legacy(monkeypatch):
+    mcp_server = _load_mcp_server_module()
+
+    monkeypatch.setattr(
+        mcp_server,
+        "build_dynamic_planning_result",
+        lambda **_kwargs: _FakePlanning(
+            mode="design",
+            fallback_required=False,
+            execution_order=["unsupported-role"],
+        ),
+    )
+
+    result = asyncio.run(
+        mcp_server.autonomous_execute(
+            "Design auth service",
+            mode="auto",
+            execution_mode="auto",
+            max_loops=1,
+            enable_legacy_fallback=True,
+        )
+    )
+
+    assert result["effective_mode"] == "legacy"
+    assert result["fallback"]["triggered"] is True
+    assert result["fallback"]["diagnostics"]["branch"] == "planning"
+    assert "no valid roles" in result["fallback"]["reason"].lower()
+    assert result["final_status"] == "legacy-complete"
 
 
 def test_autonomous_execute_falls_back_on_runtime_exception(monkeypatch):

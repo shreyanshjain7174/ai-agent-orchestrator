@@ -560,16 +560,28 @@ def _build_dynamic_workflow(
 
     seen: set[str] = set()
     normalized_roles: list[str] = []
+    ignored_roles: list[str] = []
     for role in execution_order:
         normalized = role.strip().lower()
         if not normalized or normalized in seen:
             continue
         if normalized not in role_map:
+            ignored_roles.append(normalized)
             continue
         seen.add(normalized)
         normalized_roles.append(normalized)
 
+    if ignored_roles:
+        logger.warning(
+            "Dynamic workflow ignored unsupported roles: %s",
+            sorted(set(ignored_roles)),
+        )
+
     if not normalized_roles:
+        logger.warning(
+            "Dynamic workflow received no valid roles; falling back to static workflow | requested_order=%s",
+            execution_order,
+        )
         return _build_static_workflow(
             max_supersteps,
             orchestrator,

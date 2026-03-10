@@ -1,6 +1,7 @@
 # pyright: reportMissingImports=false
 
 import json
+import threading
 
 import pytest
 
@@ -273,3 +274,53 @@ def test_cached_registry_falls_back_to_stale_inventory_on_timeout():
     assert fresh[0].id == "cached-skill"
     assert stale[0].id == "cached-skill"
     assert stale[0].health == "degraded"
+
+
+def test_cached_registry_serializes_concurrent_refreshes():
+    class SlowRegistry:
+        def __init__(self):
+            self.calls = 0
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def discover(self):
+            self.calls += 1
+            self.started.set()
+            self.release.wait(timeout=1.0)
+            return [
+                SkillMetadata(
+                    id="shared-skill",
+                    name="Shared Skill",
+                    description="Discovery should run once under contention",
+                    health="healthy",
+                )
+            ]
+
+    registry = SlowRegistry()
+    cached = CachedSkillRegistry(registry, ttl_seconds=60.0, retry_attempts=0)
+
+    results: list[list[SkillMetadata]] = []
+    errors: list[Exception] = []
+
+    def _worker() -> None:
+        try:
+            results.append(cached.discover())
+        except Exception as exc:  # pragma: no cover - defensive guard for threaded test
+            errors.append(exc)
+
+    first = threading.Thread(target=_worker)
+    second = threading.Thread(target=_worker)
+
+    first.start()
+    assert registry.started.wait(timeout=1.0)
+    second.start()
+
+    registry.release.set()
+
+    first.join(timeout=1.0)
+    second.join(timeout=1.0)
+
+    assert not errors
+    assert registry.calls == 1
+    assert len(results) == 2
+    assert all(items and items[0].id == "shared-skill" for items in results)

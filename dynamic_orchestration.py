@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field, replace
 from enum import Enum
@@ -262,21 +263,23 @@ class CachedSkillRegistry:
         self.retry_attempts = max(0, int(retry_attempts))
         self._now_fn = now_fn or time.monotonic
         self._cache: DiscoveryCacheEntry | None = None
+        self._lock = threading.Lock()
 
     def discover(self) -> list[SkillMetadata]:
-        if self._cache and not self._is_stale(self._cache):
-            return list(self._cache.skills)
+        with self._lock:
+            if self._cache and not self._is_stale(self._cache):
+                return list(self._cache.skills)
 
-        try:
-            refreshed = self._discover_with_retry()
-        except Exception:
-            if self._cache:
-                # Surface stale inventory but mark it degraded for callers.
-                return [replace(skill, health="degraded") for skill in self._cache.skills]
-            return []
+            try:
+                refreshed = self._discover_with_retry()
+            except Exception:
+                if self._cache:
+                    # Surface stale inventory but mark it degraded for callers.
+                    return [replace(skill, health="degraded") for skill in self._cache.skills]
+                return []
 
-        self._cache = DiscoveryCacheEntry(skills=refreshed, refreshed_at=self._now_fn())
-        return list(refreshed)
+            self._cache = DiscoveryCacheEntry(skills=refreshed, refreshed_at=self._now_fn())
+            return list(refreshed)
 
     def _discover_with_retry(self) -> list[SkillMetadata]:
         last_exc: Exception | None = None

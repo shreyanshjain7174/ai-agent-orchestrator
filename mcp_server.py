@@ -60,6 +60,17 @@ _EXECUTION_MODE_ALIASES: dict[str, str] = {
     "dynamic_only": "dynamic",
 }
 
+_VALID_MODES = {"auto", "design", "fix_bug", "debug", "implement", "refactor"}
+_VALID_EXECUTION_MODES = {"legacy", "dynamic", "auto"}
+_DYNAMIC_WORKFLOW_ROLES = {
+    "planner",
+    "evaluator",
+    "researcher",
+    "architect",
+    "developer",
+    "verifier",
+}
+
 _TRUE_BOOL_VALUES = {"1", "true", "yes", "on"}
 _FALSE_BOOL_VALUES = {"0", "false", "no", "off"}
 
@@ -136,6 +147,9 @@ def _aggregate_telemetry(
     discovery_values = [item.get("discovery_success_rate", 0.0) for item in loop_metrics]
     classification_values = [item.get("classification_confidence", 0.0) for item in loop_metrics]
     dag_latency_values = [item.get("dag_latency_ms", 0.0) for item in loop_metrics]
+    execution_order_validity_values = [
+        item.get("execution_order_valid_ratio", 0.0) for item in loop_metrics
+    ]
 
     dag_latency_ms = _mean_metric(dag_latency_values)
     return {
@@ -143,12 +157,35 @@ def _aggregate_telemetry(
         "classification_confidence": _mean_metric(classification_values),
         "dag_latency_ms": dag_latency_ms,
         "dag_latency": round(dag_latency_ms / 1000.0, 6),
+        "execution_order_valid_ratio": _mean_metric(execution_order_validity_values),
         "fallback_rate": _safe_rate(1 if fallback_triggered else 0, max(1, loops_executed)),
         "loop_metrics": loop_metrics,
     }
 
 
-def _translate_setting_alias(value: str, aliases: dict[str, str], setting_name: str) -> str:
+def _normalize_execution_order(execution_order: list[str]) -> list[str]:
+    seen: set[str] = set()
+    normalized_order: list[str] = []
+
+    for role in execution_order:
+        normalized_role = str(role).strip().lower()
+        if not normalized_role or normalized_role in seen:
+            continue
+        if normalized_role not in _DYNAMIC_WORKFLOW_ROLES:
+            continue
+        seen.add(normalized_role)
+        normalized_order.append(normalized_role)
+
+    return normalized_order
+
+
+def _translate_setting_alias(
+    value: str,
+    aliases: dict[str, str],
+    setting_name: str,
+    *,
+    valid_values: set[str] | None = None,
+) -> str:
     normalized = str(value).strip().lower()
     translated = aliases.get(normalized, normalized)
     if translated != normalized:
@@ -158,6 +195,13 @@ def _translate_setting_alias(value: str, aliases: dict[str, str], setting_name: 
             value,
             translated,
         )
+
+    if valid_values is not None and translated not in valid_values:
+        valid_values_text = ", ".join(sorted(valid_values))
+        raise ValueError(
+            f"Invalid {setting_name}='{value}'. Valid values: {valid_values_text}."
+        )
+
     return translated
 
 
@@ -403,7 +447,12 @@ def dynamic_plan_preview(
     inspect skill discovery, classification, role assignments, and execution DAG
     prior to actually running the autonomous loop.
     """
-    mode = _translate_setting_alias(mode, _MODE_ALIASES, "mode")
+    mode = _translate_setting_alias(
+        mode,
+        _MODE_ALIASES,
+        "mode",
+        valid_values=_VALID_MODES,
+    )
     planning = build_dynamic_planning_result(task=task, mode=mode, registry=build_default_registry())
     return planning.to_dict()
 
@@ -443,11 +492,17 @@ async def autonomous_execute(
         Dict with execution history, final output, learnings, and success status
     """
     requested_mode = mode
-    mode = _translate_setting_alias(mode, _MODE_ALIASES, "mode")
+    mode = _translate_setting_alias(
+        mode,
+        _MODE_ALIASES,
+        "mode",
+        valid_values=_VALID_MODES,
+    )
     execution_mode = _translate_setting_alias(
         execution_mode,
         _EXECUTION_MODE_ALIASES,
         "execution_mode",
+        valid_values=_VALID_EXECUTION_MODES,
     )
     enable_legacy_fallback = _translate_bool_alias(enable_legacy_fallback, "enable_legacy_fallback")
 
@@ -463,8 +518,22 @@ async def autonomous_execute(
         max_loops,
     )
 
-    loop_count = max(1, min(max_loops, 5))
+    requested_loop_count = int(max_loops)
+    loop_count = max(1, min(requested_loop_count, 5))
+    loops_clamped = loop_count != requested_loop_count
     loop_telemetry: list[dict[str, float]] = []
+
+    if loops_clamped:
+        logger.warning(
+            "[Autonomous] Clamped max_loops from %s to %s",
+            requested_loop_count,
+            loop_count,
+        )
+        _log_structured_event(
+            "autonomous.loop_clamped",
+            requested_loops=requested_loop_count,
+            clamped_loops=loop_count,
+        )
 
     _log_structured_event(
         "autonomous.start",
@@ -472,6 +541,7 @@ async def autonomous_execute(
         resolved_mode=mode,
         execution_mode=execution_mode,
         loops_requested=loop_count,
+        loops_requested_raw=requested_loop_count,
         enable_legacy_fallback=enable_legacy_fallback,
     )
 
@@ -500,6 +570,8 @@ async def autonomous_execute(
             "effective_mode": "legacy",
             "correlation_id": correlation_id,
             "loops_requested": loop_count,
+            "loops_requested_raw": requested_loop_count,
+            "loops_clamped": loops_clamped,
             "loops_executed": 1,
             "loop_history": [
                 {
@@ -567,31 +639,54 @@ async def autonomous_execute(
         planning_payload = planning.to_dict()
         effective_mode = planning.team_spec.mode if mode == "auto" else mode
         last_mode = effective_mode
+        fallback_required = planning.team_spec.fallback_required
+        fallback_reasons = list(planning.team_spec.fallback_reasons)
+        normalized_execution_order = _normalize_execution_order(planning.dag_plan.execution_order)
 
         loop_metric = _build_planning_telemetry(planning_payload, planning_latency_ms)
+        loop_metric["execution_order_valid_ratio"] = _safe_rate(
+            len(normalized_execution_order),
+            max(1, len(planning.dag_plan.execution_order)),
+        )
         loop_telemetry.append(loop_metric)
+
+        if not normalized_execution_order:
+            execution_order_reason = "Dynamic execution order contains no valid roles."
+            fallback_required = True
+            fallback_reasons.append(execution_order_reason)
+            logger.warning(
+                "[Autonomous][Fallback][planning] %s order=%s",
+                execution_order_reason,
+                planning.dag_plan.execution_order,
+            )
+            _log_structured_event(
+                "planning.execution_order_invalid",
+                loop=loop_index + 1,
+                requested_order=planning.dag_plan.execution_order,
+            )
 
         _log_structured_event(
             "planning.completed",
             loop=loop_index + 1,
             requested_mode=requested_mode,
             resolved_mode=effective_mode,
-            fallback_required=planning.team_spec.fallback_required,
+            fallback_required=fallback_required,
             discovery_success_rate=loop_metric["discovery_success_rate"],
             classification_confidence=loop_metric["classification_confidence"],
             dag_latency_ms=loop_metric["dag_latency_ms"],
+            execution_order_valid_ratio=loop_metric["execution_order_valid_ratio"],
         )
 
-        if planning.team_spec.fallback_required and not fallback_allowed:
+        if fallback_required and not fallback_allowed:
             logger.warning(
                 "[Autonomous][Fallback][planning] Dynamic planning requested fallback but legacy fallback is disabled | execution_mode=%s enable_legacy_fallback=%s reasons=%s",
                 execution_mode,
                 enable_legacy_fallback,
-                planning.team_spec.fallback_reasons,
+                fallback_reasons,
             )
 
-        if planning.team_spec.fallback_required and fallback_allowed:
-            reason = "; ".join(planning.team_spec.fallback_reasons)
+        if fallback_required and fallback_allowed:
+            reason = "; ".join(fallback_reasons)
             diagnostics = _build_fallback_diagnostics(
                 branch="planning",
                 reason=reason,
@@ -659,6 +754,8 @@ async def autonomous_execute(
                 "effective_mode": "legacy",
                 "correlation_id": correlation_id,
                 "loops_requested": loop_count,
+                "loops_requested_raw": requested_loop_count,
+                "loops_clamped": loops_clamped,
                 "loops_executed": len(loop_history),
                 "loop_history": loop_history,
                 "phases_executed": [],
@@ -677,18 +774,45 @@ async def autonomous_execute(
                 "telemetry": telemetry,
             }
 
+        if not normalized_execution_order:
+            reason = "dynamic execution_order invalid and fallback is disabled"
+            _log_structured_event(
+                "loop.error",
+                loop=loop_index + 1,
+                error=reason,
+                fallback_allowed=fallback_allowed,
+            )
+            run_result = {
+                "phases_executed": [],
+                "final_status": f"dynamic_error: {reason}",
+                "iteration_count": 0,
+                "outputs": [],
+                "success_indicators": {"completed": False, "verified": False},
+            }
+            last_run = run_result
+            loop_history.append(
+                {
+                    "loop": loop_index + 1,
+                    "resolved_mode": effective_mode,
+                    "planning": planning_payload,
+                    "telemetry": loop_metric,
+                    "run": run_result,
+                }
+            )
+            break
+
         # Embed planning context in the prompt so each loop can self-correct.
         task_prompt = (
             f"[MODE: {effective_mode}]\n"
             f"[LOOP: {loop_index + 1}/{loop_count}]\n"
-            f"[DAG_ORDER: {', '.join(planning.dag_plan.execution_order)}]\n\n"
+            f"[DAG_ORDER: {', '.join(normalized_execution_order)}]\n\n"
             f"{task}"
         )
         _AUTONOMOUS_LOOP_INDEX.set(loop_index + 1)
         try:
             run_result = await _collect_autonomous_run(
                 task_prompt,
-                execution_order=planning.dag_plan.execution_order,
+                execution_order=normalized_execution_order,
             )
         except Exception as exc:
             if fallback_allowed:
@@ -744,6 +868,8 @@ async def autonomous_execute(
                     "effective_mode": "legacy",
                     "correlation_id": correlation_id,
                     "loops_requested": loop_count,
+                    "loops_requested_raw": requested_loop_count,
+                    "loops_clamped": loops_clamped,
                     "loops_executed": len(loop_history),
                     "loop_history": loop_history,
                     "phases_executed": [],
@@ -812,6 +938,8 @@ async def autonomous_execute(
         "effective_mode": last_mode,
         "correlation_id": correlation_id,
         "loops_requested": loop_count,
+        "loops_requested_raw": requested_loop_count,
+        "loops_clamped": loops_clamped,
         "loops_executed": len(loop_history),
         "loop_history": loop_history,
         "phases_executed": last_run["phases_executed"],
