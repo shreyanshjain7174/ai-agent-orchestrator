@@ -507,7 +507,107 @@ class AutonomousOrchestrator(Executor):
         # This orchestrator monitors and guides the flow
 
 
-def create_autonomous_workflow() -> Workflow:
+def _build_static_workflow(
+    max_supersteps: int,
+    orchestrator: AutonomousOrchestrator,
+    planner: PlannerAgent,
+    evaluator: EvaluatorAgent,
+    researcher: ResearcherAgent,
+    architect: ArchitectAgent,
+    developer: DeveloperAgent,
+    verifier: VerifierAgent,
+) -> Workflow:
+    """Build the original PEGEV flow for backward compatibility."""
+    return (
+        WorkflowBuilder(max_iterations=max_supersteps)
+        .set_start_executor(orchestrator)
+        .add_edge(orchestrator, planner)       # Start with planning
+        .add_edge(planner, evaluator)          # Evaluate the plan
+        .add_edge(evaluator, researcher)       # Gather context
+        .add_edge(researcher, architect)       # Design solution
+        .add_edge(architect, developer)        # Implement
+        .add_edge(developer, verifier)         # Verify
+        .add_edge(verifier, evaluator)         # Evaluate results
+        # Evaluator decides: complete or loop back to planner
+        .build()
+    )
+
+
+def _build_dynamic_workflow(
+    max_supersteps: int,
+    orchestrator: AutonomousOrchestrator,
+    planner: PlannerAgent,
+    evaluator: EvaluatorAgent,
+    researcher: ResearcherAgent,
+    architect: ArchitectAgent,
+    developer: DeveloperAgent,
+    verifier: VerifierAgent,
+    execution_order: list[str],
+) -> Workflow:
+    """Build a mode-aware workflow from a DAG execution order.
+
+    Unknown roles are ignored, duplicate roles are de-duplicated, and if no
+    valid roles are found the caller should fall back to the static workflow.
+    """
+    role_map: dict[str, Executor] = {
+        "planner": planner,
+        "evaluator": evaluator,
+        "researcher": researcher,
+        "architect": architect,
+        "developer": developer,
+        "verifier": verifier,
+    }
+
+    seen: set[str] = set()
+    normalized_roles: list[str] = []
+    ignored_roles: list[str] = []
+    for role in execution_order:
+        normalized = role.strip().lower()
+        if not normalized or normalized in seen:
+            continue
+        if normalized not in role_map:
+            ignored_roles.append(normalized)
+            continue
+        seen.add(normalized)
+        normalized_roles.append(normalized)
+
+    if ignored_roles:
+        logger.warning(
+            "Dynamic workflow ignored unsupported roles: %s",
+            sorted(set(ignored_roles)),
+        )
+
+    if not normalized_roles:
+        logger.warning(
+            "Dynamic workflow received no valid roles; falling back to static workflow | requested_order=%s",
+            execution_order,
+        )
+        return _build_static_workflow(
+            max_supersteps,
+            orchestrator,
+            planner,
+            evaluator,
+            researcher,
+            architect,
+            developer,
+            verifier,
+        )
+
+    builder = WorkflowBuilder(max_iterations=max_supersteps).set_start_executor(orchestrator)
+    builder = builder.add_edge(orchestrator, role_map[normalized_roles[0]])
+
+    for current_role, next_role in zip(normalized_roles, normalized_roles[1:]):
+        builder = builder.add_edge(role_map[current_role], role_map[next_role])
+
+    # Keep evaluator as a terminal quality gate if verifier is included but
+    # evaluator is omitted from the dynamic order.
+    if "verifier" in normalized_roles and "evaluator" not in normalized_roles:
+        builder = builder.add_edge(verifier, evaluator)
+
+    return builder.build()
+
+
+def create_autonomous_workflow(execution_order: list[str] | None = None) -> Workflow:
     """Create the autonomous multi-agent workflow with PEGEV loop."""
     logger.info("Creating autonomous orchestrator workflow...")
     
@@ -546,23 +646,32 @@ def create_autonomous_workflow() -> Workflow:
     developer = DeveloperAgent(developer_client, id="developer")
     verifier = VerifierAgent(verifier_client, memory, id="verifier")
     
-    # Build autonomous workflow
-    # This is a simplified flow; in production, add dynamic routing based on evaluator decisions
     max_supersteps = int(os.getenv("MAX_AUTONOMOUS_SUPERSTEPS", "7"))
 
-    workflow = (
-        WorkflowBuilder(max_iterations=max_supersteps)
-        .set_start_executor(orchestrator)
-        .add_edge(orchestrator, planner)       # Start with planning
-        .add_edge(planner, evaluator)          # Evaluate the plan
-        .add_edge(evaluator, researcher)       # Gather context
-        .add_edge(researcher, architect)       # Design solution
-        .add_edge(architect, developer)        # Implement
-        .add_edge(developer, verifier)         # Verify
-        .add_edge(verifier, evaluator)         # Evaluate results
-        # Evaluator decides: complete or loop back to planner
-        .build()
-    )
+    if execution_order:
+        logger.info("Building dynamic autonomous workflow | order=%s", execution_order)
+        workflow = _build_dynamic_workflow(
+            max_supersteps,
+            orchestrator,
+            planner,
+            evaluator,
+            researcher,
+            architect,
+            developer,
+            verifier,
+            execution_order,
+        )
+    else:
+        workflow = _build_static_workflow(
+            max_supersteps,
+            orchestrator,
+            planner,
+            evaluator,
+            researcher,
+            architect,
+            developer,
+            verifier,
+        )
     
     logger.info("Autonomous workflow created successfully")
     return workflow

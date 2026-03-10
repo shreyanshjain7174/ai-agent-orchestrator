@@ -98,6 +98,75 @@ class BacktestResults:
             "duration": str(datetime.now() - self.start_time),
         }
 
+    @staticmethod
+    def _compute_mode_stats(tests: List[Dict[str, Any]]) -> Dict[str, Any]:
+        total = len(tests)
+        if total == 0:
+            return {
+                "total_tests": 0,
+                "passed_tests": 0,
+                "failed_tests": 0,
+                "success_rate_pct": 0.0,
+                "avg_duration_seconds": 0.0,
+                "avg_iterations": 0.0,
+            }
+
+        passed = sum(1 for test in tests if test.get("success"))
+        failed = total - passed
+        total_duration = sum(float(test.get("duration_seconds", 0.0)) for test in tests)
+        total_iterations = sum(int(test.get("iterations", 0)) for test in tests)
+
+        return {
+            "total_tests": total,
+            "passed_tests": passed,
+            "failed_tests": failed,
+            "success_rate_pct": round((passed / total) * 100.0, 2),
+            "avg_duration_seconds": round(total_duration / total, 3),
+            "avg_iterations": round(total_iterations / total, 3),
+        }
+
+    def get_operational_comparison(self) -> Dict[str, Any]:
+        """Build additive dynamic-vs-legacy operational comparison metrics."""
+        dynamic_modes = {"design", "fix_bug", "debug", "implement", "refactor"}
+
+        dynamic_tests = [test for test in self.tests if str(test.get("mode", "")).lower() in dynamic_modes]
+        legacy_tests = [test for test in self.tests if str(test.get("mode", "")).lower() == "legacy"]
+
+        dynamic_stats = self._compute_mode_stats(dynamic_tests)
+        legacy_stats = self._compute_mode_stats(legacy_tests)
+        legacy_coverage = legacy_stats["total_tests"] > 0
+
+        return {
+            "dynamic": dynamic_stats,
+            "legacy": legacy_stats,
+            "deltas": {
+                "success_rate_pct": round(
+                    dynamic_stats["success_rate_pct"] - legacy_stats["success_rate_pct"],
+                    2,
+                )
+                if legacy_coverage
+                else None,
+                "avg_duration_seconds": round(
+                    dynamic_stats["avg_duration_seconds"] - legacy_stats["avg_duration_seconds"],
+                    3,
+                )
+                if legacy_coverage
+                else None,
+                "avg_iterations": round(
+                    dynamic_stats["avg_iterations"] - legacy_stats["avg_iterations"],
+                    3,
+                )
+                if legacy_coverage
+                else None,
+            },
+            "legacy_coverage": legacy_coverage,
+            "notes": (
+                "Legacy comparison is a no-op until legacy mode backtests are recorded."
+                if not legacy_coverage
+                else "Dynamic and legacy comparisons computed from recorded backtests."
+            ),
+        }
+
 
 class BacktestSuite:
     """Main backtest suite."""
@@ -597,6 +666,7 @@ class BacktestSuite:
         logger.info("=" * 80)
         
         summary = self.results.get_summary()
+        operational_comparison = self.results.get_operational_comparison()
         
         logger.info(f"\n✅ PASSED TESTS: {self.results.passed_tests}/{self.results.total_tests}")
         logger.info(f"❌ FAILED TESTS: {self.results.failed_tests}/{self.results.total_tests}")
@@ -623,11 +693,29 @@ class BacktestSuite:
             logger.info("\n⚠️  ERRORS:")
             for error in self.results.errors:
                 logger.info(f"   - {error}")
+
+        logger.info("\n🔁 OPERATIONAL COMPARISON (DYNAMIC VS LEGACY):")
+        logger.info(f"   Dynamic Tests: {operational_comparison['dynamic']['total_tests']}")
+        logger.info(f"   Legacy Tests: {operational_comparison['legacy']['total_tests']}")
+        logger.info(f"   Legacy Coverage: {operational_comparison['legacy_coverage']}")
+        logger.info(
+            "   Success Rate Delta (pct): %s",
+            operational_comparison["deltas"]["success_rate_pct"],
+        )
+        logger.info(
+            "   Avg Duration Delta (s): %s",
+            operational_comparison["deltas"]["avg_duration_seconds"],
+        )
+        logger.info(
+            "   Avg Iterations Delta: %s",
+            operational_comparison["deltas"]["avg_iterations"],
+        )
         
         # Save report to JSON
         report = {
             "timestamp": datetime.now().isoformat(),
             "summary": summary,
+            "operational_comparison": operational_comparison,
             "tests": self.results.tests,
             "errors": self.results.errors
         }

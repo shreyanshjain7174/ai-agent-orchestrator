@@ -1,0 +1,56 @@
+name: Test Suite
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+      - feat/**
+
+jobs:
+  unit-tests:
+    name: Unit Tests (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest pytest-asyncio pytest-cov pytest-timeout pytest-mock
+
+      - name: Syntax validation
+        run: |
+          python -m py_compile dynamic_orchestration.py mcp_server.py orchestrator.py autonomous_orchestrator.py
+
+      - name: Run deterministic unit tests
+        run: |
+          python -m pytest tests/unit -q
+
+      - name: Run deterministic integration tests
+        run: |
+          python -m pytest tests/integration -q
+
+      - name: Run deterministic failure-mode tests
+        run: |
+          python -m pytest tests/failure_modes -q
+
+      - name: Run deterministic e2e-lite tests
+        run: |
+          python -m pytest tests/e2e -q
+
+      - name: Enforce dynamic architecture coverage threshold
+        run: |
+          python -m pytest --cov=dynamic_orchestration --cov=mcp_server --cov-report=term-missing --cov-fail-under=75 -q

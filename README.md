@@ -10,6 +10,7 @@ A sophisticated multi-agent orchestration system that coordinates specialized AI
 **🚀 Key Features:**
 - 🤖 **6 Specialized AI Agents** - Plan, Evaluate, Research, Architect, Develop, Verify
 - 🔄 **Self-Healing PEGEV Loop** - Autonomous execution with iterative improvement
+- 🧭 **Dynamic Team Planning** - Skill discovery, classification, and adaptive DAG previews
 - 🧠 **Persistent Memory** - Learns from mistakes and improves over time
 - 🛠️ **GitHub Copilot Integration** - Available as MCP server with 8 tools
 - ⚡ **Autonomous Execution** - Handles "design", "fix_bug", "debug", "implement" tasks
@@ -180,6 +181,47 @@ Task Completed (Verified & Validated)
 
 ### Configuration Options
 
+#### Dynamic Discovery Controls (optional)
+
+Use these when tuning runtime skill discovery behavior:
+
+```bash
+# Optional JSON skill inventory injected at runtime
+AI_ORCHESTRATOR_SKILLS_JSON=[{"id":"python-pro","name":"Python Pro","description":"Python coding expert","source":"env","input_schema_summary":"{task: string}","health":"healthy"}]
+
+# Discovery resilience controls
+AI_ORCHESTRATOR_DISCOVERY_RETRY_ATTEMPTS=1
+AI_ORCHESTRATOR_DISCOVERY_TTL_SECONDS=60
+
+# Classification confidence threshold (0.0-1.0)
+AI_ORCHESTRATOR_CLASSIFIER_MIN_CONFIDENCE=0.6
+
+# Dynamic composition guardrail
+AI_ORCHESTRATOR_MAX_TEAM_SIZE=6
+
+# DAG planner controls
+# dynamic (default): role-aware adaptive dependencies
+# static: mode-template dependencies
+AI_ORCHESTRATOR_DAG_MODE=dynamic
+
+# Maximum DAG nodes (minimum enforced to 1)
+AI_ORCHESTRATOR_MAX_DAG_NODES=24
+```
+
+Discovery schema is normalized to: `id`, `name`, `description`, `source`, `input_schema_summary`, and `health`.
+If fresh discovery fails, the system gracefully falls back to cached inventory.
+
+#### Migration and Backward Compatibility (Phase 8)
+
+Legacy settings continue to work, but they now emit deprecation warnings and are translated to canonical dynamic settings.
+
+- Migration matrix: `docs/migration-matrix.md`
+- Architecture: `docs/dynamic-orchestration-architecture.md`
+- Operations runbook: `docs/operations-runbook.md`
+- Planning/runtime legacy fallback diagnostics are included in `autonomous_execute` response under `fallback.diagnostics`
+- `autonomous_execute` now includes additive `correlation_id` and `telemetry` fields for discovery success rate, classifier confidence, DAG latency, and fallback rate
+- Safe rollout recommendation: use `execution_mode=auto` with `enable_legacy_fallback=true`
+
 #### Option 1: GitHub Models (Free Tier - Development)
 
 Get a GitHub Personal Access Token:
@@ -258,9 +300,16 @@ uv run --prerelease=allow --with "mcp[cli]>=1.6.0,<2.0.0" --with-requirements re
 
 **Autonomous Mode (Recommended for complex tasks):**
 - `autonomous_execute` ⚡ - Run self-healing PEGEV loop
-  - Modes: `design`, `fix_bug`, `debug`, `implement`, `refactor`
+    - Modes: `auto`, `design`, `fix_bug`, `debug`, `implement`, `refactor`
+        - Execution paths: `legacy`, `dynamic`, `auto` (default)
+            - `legacy`: run legacy `orchestrate_task` directly
+            - `dynamic`: dynamic planning/execution only (no legacy fallback)
+            - `auto`: dynamic-first with optional legacy fallback
+    - Supports bounded loop retries with `max_loops` (1-5)
+        - Supports safe legacy fallback with `enable_legacy_fallback=true` when `execution_mode=auto`
   - Auto-iterates until verified success
   - Learns from mistakes and self-corrects
+- `dynamic_plan_preview` - Preview dynamic skill classification, team composition, and DAG order before execution
 - `get_learnings` - View past learnings from memory
 - `show_autonomous_capabilities` - Display system info
 
@@ -268,6 +317,9 @@ uv run --prerelease=allow --with "mcp[cli]>=1.6.0,<2.0.0" --with-requirements re
 ```
 User: "Use autonomous_execute to design a secure user authentication API"
 User: "Fix this bug using autonomous_execute mode=fix_bug"
+User: "Run autonomous_execute execution_mode=legacy for strict legacy routing"
+User: "Run autonomous_execute mode=debug execution_mode=dynamic"
+User: "Preview the dynamic team with dynamic_plan_preview mode=auto"
 User: "Show me what the agents have learned with get_learnings"
 ```
 
@@ -428,7 +480,17 @@ az login
 ```
 ai-agent-orchestrator/
 ├── orchestrator.py          # Main orchestrator implementation
+├── autonomous_orchestrator.py  # Autonomous PEGEV workflow
+├── dynamic_orchestration.py # Dynamic skill discovery/classification/composition/DAG core
+├── mcp_server.py            # MCP tools and loop execution API
+├── docs/
+│   ├── migration-matrix.md  # Legacy-to-canonical compatibility matrix
+│   ├── dynamic-orchestration-architecture.md # Dynamic execution architecture and observability
+│   └── operations-runbook.md # Rollout, rollback, and troubleshooting guide
 ├── requirements.txt         # Python dependencies
+├── pyproject.toml           # Packaging, scripts, test extras
+├── tests/                   # Deterministic unit/integration/failure tests
+├── .github/workflows/       # CI validation
 ├── .env.example            # Environment configuration template
 ├── .env                    # Your environment configuration (git-ignored)
 ├── README.md               # This file
