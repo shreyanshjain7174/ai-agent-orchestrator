@@ -37,8 +37,20 @@ jobs:
 
       - name: Run deterministic unit tests
         run: |
-          python -m pytest tests/unit/test_dynamic_orchestration.py -q
+          python -m pytest tests/unit -q
+
+      - name: Run deterministic integration tests
+        run: |
+          python -m pytest tests/integration -q
 
       - name: Run deterministic failure-mode tests
         run: |
-          python -m pytest tests/failure_modes/test_dynamic_planning_failure_modes.py -q
+          python -m pytest tests/failure_modes -q
+
+      - name: Run deterministic e2e-lite tests
+        run: |
+          python -m pytest tests/e2e -q
+
+      - name: Enforce dynamic architecture coverage threshold
+        run: |
+          python -m pytest --cov=dynamic_orchestration --cov=mcp_server --cov-report=term-missing --cov-fail-under=75 -q

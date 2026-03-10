@@ -8,6 +8,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.fakes import FakeLLMClient
+from tests.fixtures.golden_routing_fallback import GOLDEN_ROUTING_FALLBACK_CASES, golden_case_ids
+
 
 def _install_mcp_server_stubs() -> None:
     """Install lightweight stubs so mcp_server can be imported in CI without external SDKs."""
@@ -64,14 +67,18 @@ def _install_mcp_server_stubs() -> None:
     orchestrator.DEFAULT_DEVELOPER_MODEL = "developer-model"
     orchestrator.DEFAULT_QA_MODEL = "qa-model"
 
-    class _FakeAgent:
-        async def run(self, messages, should_respond=True):
-            _ = (messages, should_respond)
-            return SimpleNamespace(text="ok")
+    fake_llm = FakeLLMClient()
 
-    class _FakeExecutor:
-        def __init__(self, *_args, **_kwargs):
-            self.agent = _FakeAgent()
+    def _make_fake_executor(default_name: str):
+        class _FakeExecutor:
+            def __init__(self, *_args, **_kwargs):
+                agent_id = str(_kwargs.get("id", default_name))
+                self.agent = fake_llm.create_agent(
+                    name=agent_id,
+                    instructions=f"Stub instructions for {default_name}",
+                )
+
+        return _FakeExecutor
 
     def _create_orchestrator_workflow():
         class _Workflow:
@@ -81,15 +88,16 @@ def _install_mcp_server_stubs() -> None:
 
         return _Workflow()
 
-    orchestrator.DeveloperAgent = _FakeExecutor
-    orchestrator.PrincipalArchitect = _FakeExecutor
-    orchestrator.QualityAssuranceAgent = _FakeExecutor
+    orchestrator.DeveloperAgent = _make_fake_executor("DeveloperAgent")
+    orchestrator.PrincipalArchitect = _make_fake_executor("PrincipalArchitect")
+    orchestrator.QualityAssuranceAgent = _make_fake_executor("QualityAssuranceAgent")
     orchestrator.create_ai_client = lambda *_args, **_kwargs: object()
     orchestrator.create_orchestrator_workflow = _create_orchestrator_workflow
     orchestrator.get_base_deployment_name = lambda: "base-model"
     orchestrator.get_credential_for_endpoint = lambda _endpoint: None
     orchestrator.get_project_endpoint = lambda: "https://example.test"
     orchestrator.resolve_deployment_name = lambda _name, default, _base: default
+    orchestrator.fake_llm = fake_llm
     sys.modules["orchestrator"] = orchestrator
 
     autonomous = types.ModuleType("autonomous_orchestrator")
@@ -411,3 +419,81 @@ def test_autonomous_execute_dynamic_mode_runtime_exception_no_fallback(monkeypat
 
     assert result["fallback"]["triggered"] is False
     assert result["final_status"].startswith("dynamic_error:")
+
+
+@pytest.mark.parametrize("case", GOLDEN_ROUTING_FALLBACK_CASES, ids=golden_case_ids(GOLDEN_ROUTING_FALLBACK_CASES))
+def test_autonomous_execute_matches_golden_routing_and_fallback_contract(monkeypatch, case):
+    mcp_server = _load_mcp_server_module()
+
+    monkeypatch.setattr(
+        mcp_server,
+        "build_dynamic_planning_result",
+        lambda **_kwargs: _FakePlanning(
+            mode=case["planning_mode"],
+            fallback_required=case["planning_fallback_required"],
+            fallback_reasons=list(case["planning_fallback_reasons"]),
+        ),
+    )
+
+    async def _collect(*_args, **_kwargs):
+        if case["run_should_raise"]:
+            raise TimeoutError("golden timeout")
+        return {
+            "phases_executed": ["PLAN", "EXECUTE", "VERIFY"],
+            "final_status": case["run_final_status"],
+            "iteration_count": 1,
+            "outputs": [f"golden:{case['id']}"],
+            "success_indicators": {
+                "completed": bool(case["run_completed"]),
+                "verified": bool(case["run_completed"]),
+            },
+        }
+
+    monkeypatch.setattr(mcp_server, "_collect_autonomous_run", _collect)
+
+    result = asyncio.run(
+        mcp_server.autonomous_execute(
+            case["task"],
+            mode=case["mode"],
+            execution_mode=case["execution_mode"],
+            max_loops=1,
+            enable_legacy_fallback=True,
+        )
+    )
+
+    assert result["effective_mode"] == case["expected_effective_mode"]
+    assert result["fallback"]["triggered"] is case["expected_fallback_triggered"]
+    assert result["fallback"]["mode_used"] == case["expected_fallback_mode"]
+
+    if case["expected_fallback_triggered"]:
+        assert result["final_status"] == "legacy-complete"
+    elif case["run_should_raise"]:
+        assert result["final_status"].startswith("dynamic_error:")
+    else:
+        assert result["final_status"] == case["run_final_status"]
+
+
+def test_specialized_mcp_tools_exercise_fake_llm_client():
+    mcp_server = _load_mcp_server_module()
+
+    architect_output = asyncio.run(
+        mcp_server.architect_design("Design deterministic auth module")
+    )
+    developer_output = asyncio.run(
+        mcp_server.developer_implement(
+            "Implement deterministic auth module",
+            architecture="{\"layers\": [\"api\", \"service\"]}",
+        )
+    )
+    qa_output = asyncio.run(
+        mcp_server.qa_review("Must be deterministic", "Implementation summary")
+    )
+
+    suite = mcp_server.get_executor_suite()
+
+    assert "architect_mcp" in architect_output
+    assert "developer_mcp" in developer_output
+    assert "qa_mcp" in qa_output
+    assert len(suite.architect.agent.calls) >= 1
+    assert len(suite.developer.agent.calls) >= 1
+    assert len(suite.qa.agent.calls) >= 1
