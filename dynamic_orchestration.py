@@ -561,6 +561,14 @@ class TeamComposer:
         "refactor": (Capability.PLANNING, Capability.ARCHITECTURE, Capability.IMPLEMENTATION, Capability.VERIFICATION),
     }
 
+    _CRITICAL_CAPABILITIES: dict[str, tuple[Capability, ...]] = {
+        "design": (Capability.PLANNING, Capability.ARCHITECTURE),
+        "implement": (Capability.PLANNING, Capability.IMPLEMENTATION, Capability.VERIFICATION),
+        "fix_bug": (Capability.EVALUATION, Capability.IMPLEMENTATION, Capability.VERIFICATION),
+        "debug": (Capability.EVALUATION, Capability.IMPLEMENTATION, Capability.VERIFICATION),
+        "refactor": (Capability.PLANNING, Capability.IMPLEMENTATION, Capability.VERIFICATION),
+    }
+
     _ROLE_BY_CAPABILITY: dict[Capability, str] = {
         Capability.PLANNING: "planner",
         Capability.EVALUATION: "evaluator",
@@ -574,22 +582,49 @@ class TeamComposer:
         Capability.UNKNOWN: "generalist",
     }
 
+    _OPTIONAL_CAPABILITY_HINTS: tuple[tuple[tuple[str, ...], Capability], ...] = (
+        (("security", "secure", "auth", "owasp", "vulnerability"), Capability.SECURITY),
+        (("test", "tests", "coverage", "qa", "verify", "verification"), Capability.TESTING),
+    )
+
+    def __init__(self, max_team_size: int | None = None):
+        resolved_max = (
+            _env_int("AI_ORCHESTRATOR_MAX_TEAM_SIZE", 6)
+            if max_team_size is None
+            else int(max_team_size)
+        )
+        self.max_team_size = max(1, resolved_max)
+
     def compose(self, profile: TaskProfile, classified: Iterable[ClassifiedSkill]) -> TeamSpec:
         """Select best skills for required capabilities in the resolved mode."""
 
         resolved_mode = self._resolve_mode(profile)
         required = self._MODE_REQUIREMENTS.get(resolved_mode, self._MODE_REQUIREMENTS["implement"])
+        critical_capabilities = set(
+            self._CRITICAL_CAPABILITIES.get(resolved_mode, required)
+        )
+
+        optional = self._optional_capabilities_for_task(profile.task)
+        target_capabilities = list(required)
+        for capability in optional:
+            if capability not in target_capabilities:
+                target_capabilities.append(capability)
 
         pool = list(classified)
         assignments: list[TeamAssignment] = []
         fallback_reasons: list[str] = []
 
-        for capability in required:
+        for capability in target_capabilities:
             selected = self._select_best_skill(pool, capability)
             if not selected:
-                fallback_reasons.append(
-                    f"Missing capability '{capability.value}' for mode '{resolved_mode}'."
-                )
+                if capability in critical_capabilities:
+                    fallback_reasons.append(
+                        f"Critical capability '{capability.value}' missing for mode '{resolved_mode}'."
+                    )
+                elif capability in required:
+                    fallback_reasons.append(
+                        f"Missing capability '{capability.value}' for mode '{resolved_mode}'."
+                    )
                 continue
 
             confidence = selected.confidence_by_capability.get(capability, 0.0)
@@ -602,12 +637,69 @@ class TeamComposer:
                 )
             )
 
+        assignments, sizing_reason = self._bound_team(assignments, critical_capabilities)
+        if sizing_reason:
+            fallback_reasons.append(sizing_reason)
+
+        fallback_reasons = self._dedupe_preserve_order(fallback_reasons)
+
         return TeamSpec(
             mode=resolved_mode,
             assignments=assignments,
             fallback_required=bool(fallback_reasons),
             fallback_reasons=fallback_reasons,
         )
+
+    def _optional_capabilities_for_task(self, task: str) -> tuple[Capability, ...]:
+        lowered = task.lower()
+        optional: list[Capability] = []
+        for keywords, capability in self._OPTIONAL_CAPABILITY_HINTS:
+            if any(keyword in lowered for keyword in keywords):
+                optional.append(capability)
+        return tuple(optional)
+
+    def _bound_team(
+        self,
+        assignments: list[TeamAssignment],
+        critical_capabilities: set[Capability],
+    ) -> tuple[list[TeamAssignment], str | None]:
+        if len(assignments) <= self.max_team_size:
+            return assignments, None
+
+        critical = [a for a in assignments if a.capability in critical_capabilities]
+        non_critical = [a for a in assignments if a.capability not in critical_capabilities]
+
+        if len(critical) > self.max_team_size:
+            trimmed = sorted(
+                critical,
+                key=lambda item: (item.confidence, item.role),
+                reverse=True,
+            )[: self.max_team_size]
+            return (
+                sorted(trimmed, key=lambda item: item.role),
+                f"Critical assignments exceeded max_team_size={self.max_team_size}; trimmed to highest confidence critical roles.",
+            )
+
+        remaining_slots = self.max_team_size - len(critical)
+        ranked_non_critical = sorted(
+            non_critical,
+            key=lambda item: (item.confidence, item.role),
+            reverse=True,
+        )
+        bounded = critical + ranked_non_critical[:remaining_slots]
+        bounded = sorted(bounded, key=lambda item: item.role)
+        return bounded, None
+
+    @staticmethod
+    def _dedupe_preserve_order(values: list[str]) -> list[str]:
+        seen: set[str] = set()
+        ordered: list[str] = []
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            ordered.append(value)
+        return ordered
 
     def _resolve_mode(self, profile: TaskProfile) -> str:
         mode = profile.mode.strip().lower() or "auto"
