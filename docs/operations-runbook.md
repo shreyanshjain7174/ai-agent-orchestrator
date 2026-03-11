@@ -7,6 +7,7 @@ This runbook covers rollout, rollback, and troubleshooting for dynamic orchestra
 - autonomous_execute additive telemetry fields
 - structured logs with correlation IDs and phase transitions
 - backtest operational comparison output
+- deterministic performance baseline and CI smoke regression budget checks
 
 ## Pre-Deployment Checklist
 
@@ -17,11 +18,25 @@ This runbook covers rollout, rollback, and troubleshooting for dynamic orchestra
 
 Required checks:
 
+- python3 scripts/profile_execution_paths.py --iterations 30 --output docs/performance-baseline.json --report docs/performance-baseline.md
+- python3 -m pytest tests/integration/test_performance_smoke.py -q
 - python3 -m pytest tests/integration/test_mcp_server_contracts.py -q
 - python3 -m pytest tests/integration/test_migration_docs_smoke.py -q
 - python3 -m pytest tests/e2e/test_dynamic_golden_paths.py -q
 - python3 -m pytest -q
 - python3 -m compileall mcp_server.py backtest_suite.py dynamic_orchestration.py autonomous_orchestrator.py
+
+## Performance Baseline Procedure
+
+1. Generate/update deterministic baseline artifacts:
+   - python3 scripts/profile_execution_paths.py --iterations 30 --output docs/performance-baseline.json --report docs/performance-baseline.md
+2. Confirm the JSON includes:
+   - execution_modes latency and control-path metrics
+   - concurrent load scenarios
+   - memory trend summary and soft_budgets
+3. Run CI-safe smoke benchmark:
+   - python3 -m pytest tests/integration/test_performance_smoke.py -q
+4. If smoke fails, compare current measurements against `docs/performance-baseline.md` and investigate execution-mode-specific regressions first.
 
 ## Rollout Plan
 

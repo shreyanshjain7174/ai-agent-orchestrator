@@ -1,6 +1,7 @@
 # pyright: reportMissingImports=false
 
 import importlib
+import json
 import sys
 import types
 from pathlib import Path
@@ -82,6 +83,9 @@ def test_readme_and_env_example_reference_migration_guidance():
     assert "docs/migration-matrix.md" in readme
     assert "docs/dynamic-orchestration-architecture.md" in readme
     assert "docs/operations-runbook.md" in readme
+    assert "docs/performance-baseline.md" in readme
+    assert "docs/performance-baseline.json" in readme
+    assert "scripts/profile_execution_paths.py" in readme
     assert "AI_ORCHESTRATOR_ENABLE_SKILL_DISCOVERY" in env_example
     assert "ENABLE_SKILL_DISCOVERY" in env_example
 
@@ -101,6 +105,33 @@ def test_dynamic_architecture_and_operations_runbook_docs():
     assert "Rollout Plan" in runbook_doc
     assert "Rollback Plan" in runbook_doc
     assert "Troubleshooting" in runbook_doc
+    assert "Performance Baseline Procedure" in runbook_doc
+    assert "tests/integration/test_performance_smoke.py" in runbook_doc
+
+
+def test_performance_baseline_docs_contract_shape():
+    baseline_json = json.loads(
+        (REPO_ROOT / "docs" / "performance-baseline.json").read_text(encoding="utf-8")
+    )
+    baseline_md = (REPO_ROOT / "docs" / "performance-baseline.md").read_text(encoding="utf-8")
+
+    assert baseline_json["schema_version"] == 1
+    assert baseline_json["deterministic_offline"] is True
+    assert "execution_modes" in baseline_json
+    assert "concurrent_load" in baseline_json
+    assert "memory_trends" in baseline_json
+    assert "soft_budgets" in baseline_json
+
+    for mode in ("legacy", "dynamic", "auto"):
+        assert mode in baseline_json["execution_modes"]
+        assert "latency_ms" in baseline_json["execution_modes"][mode]
+        assert "fallback_rate" in baseline_json["execution_modes"][mode]
+
+    assert "Performance Baseline" in baseline_md
+    assert "Execution Mode Results" in baseline_md
+    assert "Concurrent Load Results" in baseline_md
+    assert "Memory Trend Results" in baseline_md
+    assert "Optimization Recommendations" in baseline_md
 
 
 def test_backtest_operational_comparison_contract_with_stubbed_import(tmp_path, monkeypatch):
