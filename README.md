@@ -218,9 +218,25 @@ Legacy settings continue to work, but they now emit deprecation warnings and are
 - Migration matrix: `docs/migration-matrix.md`
 - Architecture: `docs/dynamic-orchestration-architecture.md`
 - Operations runbook: `docs/operations-runbook.md`
+- Performance baseline report: `docs/performance-baseline.md`
+- Performance baseline JSON (soft budgets for CI smoke checks): `docs/performance-baseline.json`
 - Planning/runtime legacy fallback diagnostics are included in `autonomous_execute` response under `fallback.diagnostics`
 - `autonomous_execute` now includes additive `correlation_id` and `telemetry` fields for discovery success rate, classifier confidence, DAG latency, and fallback rate
 - Safe rollout recommendation: use `execution_mode=auto` with `enable_legacy_fallback=true`
+
+#### Performance Baseline and Regression Smoke (Phase 10)
+
+Generate deterministic offline performance artifacts (legacy/dynamic/auto execution paths, concurrent load, and memory trend sampling):
+
+```bash
+python3 scripts/profile_execution_paths.py --iterations 30 --output docs/performance-baseline.json --report docs/performance-baseline.md
+```
+
+Run CI-safe smoke regression checks against soft budgets in `docs/performance-baseline.json`:
+
+```bash
+python3 -m pytest tests/integration/test_performance_smoke.py -q
+```
 
 #### Option 1: GitHub Models (Free Tier - Development)
 

@@ -1,0 +1,262 @@
+{
+  "concurrent_load": {
+    "batches": 2,
+    "parallelism_values": [
+      2,
+      4
+    ],
+    "scenarios": [
+      {
+        "batches": 2,
+        "execution_mode": "legacy",
+        "fallback_rate": 0.0,
+        "key": "legacy:p2",
+        "latency_ms": {
+          "max": 0.0217,
+          "mean": 0.0179,
+          "median": 0.0173,
+          "p95": 0.0217
+        },
+        "parallelism": 2,
+        "requests": 4,
+        "throughput_rps": 21942.9376
+      },
+      {
+        "batches": 2,
+        "execution_mode": "legacy",
+        "fallback_rate": 0.0,
+        "key": "legacy:p4",
+        "latency_ms": {
+          "max": 0.024,
+          "mean": 0.0174,
+          "median": 0.0167,
+          "p95": 0.024
+        },
+        "parallelism": 4,
+        "requests": 8,
+        "throughput_rps": 32487.1775
+      },
+      {
+        "batches": 2,
+        "execution_mode": "dynamic",
+        "fallback_rate": 0.0,
+        "key": "dynamic:p2",
+        "latency_ms": {
+          "max": 0.3951,
+          "mean": 0.3415,
+          "median": 0.3337,
+          "p95": 0.3951
+        },
+        "parallelism": 2,
+        "requests": 4,
+        "throughput_rps": 2721.3957
+      },
+      {
+        "batches": 2,
+        "execution_mode": "dynamic",
+        "fallback_rate": 0.0,
+        "key": "dynamic:p4",
+        "latency_ms": {
+          "max": 0.3232,
+          "mean": 0.3138,
+          "median": 0.3155,
+          "p95": 0.3232
+        },
+        "parallelism": 4,
+        "requests": 8,
+        "throughput_rps": 3055.6219
+      },
+      {
+        "batches": 2,
+        "execution_mode": "auto",
+        "fallback_rate": 0.0,
+        "key": "auto:p2",
+        "latency_ms": {
+          "max": 0.3215,
+          "mean": 0.3151,
+          "median": 0.3153,
+          "p95": 0.3215
+        },
+        "parallelism": 2,
+        "requests": 4,
+        "throughput_rps": 2912.2679
+      },
+      {
+        "batches": 2,
+        "execution_mode": "auto",
+        "fallback_rate": 0.0,
+        "key": "auto:p4",
+        "latency_ms": {
+          "max": 0.6427,
+          "mean": 0.3615,
+          "median": 0.3165,
+          "p95": 0.6427
+        },
+        "parallelism": 4,
+        "requests": 8,
+        "throughput_rps": 2651.5677
+      }
+    ]
+  },
+  "deterministic_offline": true,
+  "execution_modes": {
+    "auto": {
+      "execution_order_valid_ratio": 0.75,
+      "fallback_rate": 0.0,
+      "iterations": 30,
+      "latency_ms": {
+        "max": 0.7886,
+        "mean": 0.4508,
+        "median": 0.4314,
+        "p95": 0.5258
+      },
+      "loops_executed": {
+        "max": 1,
+        "mean": 1.0,
+        "min": 1
+      }
+    },
+    "dynamic": {
+      "execution_order_valid_ratio": 0.75,
+      "fallback_rate": 0.0,
+      "iterations": 30,
+      "latency_ms": {
+        "max": 0.9094,
+        "mean": 0.4686,
+        "median": 0.4358,
+        "p95": 0.8306
+      },
+      "loops_executed": {
+        "max": 1,
+        "mean": 1.0,
+        "min": 1
+      }
+    },
+    "legacy": {
+      "execution_order_valid_ratio": null,
+      "fallback_rate": 0.0,
+      "iterations": 30,
+      "latency_ms": {
+        "max": 0.283,
+        "mean": 0.1317,
+        "median": 0.1202,
+        "p95": 0.1749
+      },
+      "loops_executed": {
+        "max": 1,
+        "mean": 1.0,
+        "min": 1
+      }
+    }
+  },
+  "memory_trends": {
+    "repeats": 2,
+    "scenarios": [
+      {
+        "current_kib": 17.8311,
+        "loop_count": 1,
+        "loops_executed_mean": 1.0,
+        "name": "small_l1",
+        "peak_kib": 28.9727,
+        "task_repeat": 1,
+        "task_words": 5
+      },
+      {
+        "current_kib": 18.2686,
+        "loop_count": 1,
+        "loops_executed_mean": 1.0,
+        "name": "medium_l1",
+        "peak_kib": 29.7021,
+        "task_repeat": 8,
+        "task_words": 40
+      },
+      {
+        "current_kib": 36.3506,
+        "loop_count": 3,
+        "loops_executed_mean": 3.0,
+        "name": "medium_l3",
+        "peak_kib": 47.7686,
+        "task_repeat": 8,
+        "task_words": 40
+      },
+      {
+        "current_kib": 54.5029,
+        "loop_count": 5,
+        "loops_executed_mean": 5.0,
+        "name": "large_l5",
+        "peak_kib": 66.249,
+        "task_repeat": 16,
+        "task_words": 80
+      }
+    ],
+    "summary": {
+      "peak_growth_ratio": 2.2866,
+      "peak_kib_max": 66.249,
+      "peak_kib_min": 28.9727
+    }
+  },
+  "methodology": {
+    "concurrency_batches": 2,
+    "execution_modes": [
+      "legacy",
+      "dynamic",
+      "auto"
+    ],
+    "iterations": 30,
+    "memory_repeats": 2,
+    "stubbed_imports": true,
+    "task": "Implement endpoint with tests"
+  },
+  "schema_version": 1,
+  "soft_budgets": {
+    "concurrency": {
+      "auto:p2": {
+        "p95_max": 20.0,
+        "throughput_min": 29.1227
+      },
+      "auto:p4": {
+        "p95_max": 20.0,
+        "throughput_min": 26.5157
+      },
+      "dynamic:p2": {
+        "p95_max": 20.0,
+        "throughput_min": 27.214
+      },
+      "dynamic:p4": {
+        "p95_max": 20.0,
+        "throughput_min": 30.5562
+      },
+      "legacy:p2": {
+        "p95_max": 20.0,
+        "throughput_min": 219.4294
+      },
+      "legacy:p4": {
+        "p95_max": 20.0,
+        "throughput_min": 324.8718
+      }
+    },
+    "execution_order_valid_ratio_min": {
+      "auto": 0.5625,
+      "dynamic": 0.5625
+    },
+    "fallback_rate_max": 0.25,
+    "memory_kib": {
+      "peak_growth_ratio_max": 6.0,
+      "peak_kib_max": 264.996
+    },
+    "mode_latency_ms": {
+      "auto": {
+        "median_max": 6.0,
+        "p95_max": 12.0
+      },
+      "dynamic": {
+        "median_max": 6.0,
+        "p95_max": 12.0
+      },
+      "legacy": {
+        "median_max": 6.0,
+        "p95_max": 12.0
+      }
+    }
+  }
+}
