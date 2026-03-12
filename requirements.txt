@@ -24,5 +24,5 @@ agent-dev-cli
 # MCP server runtime for Copilot tool registration
 mcp[cli]>=1.6.0,<2.0.0
 
-# Supermemory (mem0) for enhanced memory capabilities
-git+https://github.com/supermemory-ai/mem0.git
+# Mem0 package for enhanced memory capabilities
+mem0ai>=1.0.5
